@@ -1,5 +1,5 @@
 /*
- * Ocean General Circulation Modell ( OGCM ) applied to laminar flow
+ * Ocean General Circulation Modell(OGCM) applied to laminar flow
  * Program for the computation of geo-atmospherical circulating flows in a spherical shell
  * Finite difference scheme for the solution of the 3D Navier-Stokes equations
  * with 2 additional transport equations to describe the water vapour and co2 concentration
@@ -10,1128 +10,653 @@
 
 #include <iostream>
 #include <cmath>
-
-#include "RHS_Hyd.h"
+#include "cHydrosphereModel.h"
+#include "Utils.h"
 
 using namespace std;
+using namespace AtomUtils;
 
+#define dxdr_a(X) \
+    (h_d_i * (X->x[i+1][j][k] - X->x[i-1][j][k])/(2. * dr))
+#define dxdr_b(X) \
+    (h_d_i * (- 3. * X->x[i][j][k] + 4. * X->x[i+1][j][k] - X->x[i+2][j][k])/(2. * dr))
+#define d2xdr2_a(X) \
+    (h_d_i * (X->x[i+1][j][k] - 2. * X->x[i][j][k] + X->x[i-1][j][k])/dr2)
+#define d2xdr2_b(X) \
+    (h_d_i * (X->x[i][j][k] - 2. * X->x[i+1][j][k] + X->x[i+2][j][k])/dr2)
+#define dxdthe_a(X) \
+    (h_d_j * (X->x[i][j+1][k] - X->x[i][j-1][k])/(2. * dthe))
+#define dxdthe_b(X) \
+    (h_d_j * (- 3. * X->x[i][j][k] + 4. * X->x[i][j+1][k] - X->x[i][j+2][k])/(2. * dthe))
+#define dxdthe_c(X) \
+    (h_d_j * (- 3. * X->x[i][j][k] + 4. * X->x[i][j-1][k] - X->x[i][j-2][k])/(2. * dthe))
+#define dxdthe_d(X) \
+    (h_d_j * (X->x[i][j+1][k] - X->x[i][j][k])/dthe)
+#define dxdthe_e(X) \
+    (h_d_j * (X->x[i][j-1][k] - X->x[i][j][k])/dthe)
+#define d2xdthe2_a(X) \
+    (h_d_j * (X->x[i][j+1][k] - 2. * X->x[i][j][k] + X->x[i][j-1][k])/dthe2)
+#define d2xdthe2_b(X) \
+    (h_d_j * (X->x[i][j][k] - 2. * X->x[i][j+1][k] + X->x[i][j+2][k])/dthe2)
+#define d2xdthe2_c(X) \
+    (h_d_j * (X->x[i][j][k] - 2. * X->x[i][j-1][k] + X->x[i][j-2][k])/dthe2)
+#define dxdphi_a(X) \
+    (h_d_k * (X->x[i][j][k+1] - X->x[i][j][k-1])/(2. * dphi))
+#define dxdphi_b(X) \
+    (h_d_k * (- 3. * X->x[i][j][k] + 4. * X->x[i][j][k+1] - X->x[i][j][k+2])/(2. * dphi))
+#define dxdphi_c(X) \
+    (h_d_k * (- 3. * X->x[i][j][k] + 4. * X->x[i][j][k-1] - X->x[i][j][k-2])/(2. * dphi))
+#define dxdphi_d(X) \
+    (h_d_k * (X->x[i][j][k+1] - X->x[i][j][k])/dphi)
+#define dxdphi_e(X) \
+    (h_d_k * (X->x[i][j][k-1] - X->x[i][j][k])/dphi)
+#define d2xdphi2_a(X) \
+    (h_d_k * (X->x[i][j][k+1] - 2. * X->x[i][j][k] + X->x[i][j][k-1])/dphi2)
+#define d2xdphi2_b(X) \
+    (h_d_k * (X->x[i][j][k] - 2. * X->x[i][j][k+1] + X->x[i][j][k+2])/dphi2)
+#define d2xdphi2_c(X) \
+    (h_d_k * (X->x[i][j][k] - 2. * X->x[i][j][k-1] + X->x[i][j][k-2])/dphi2)
+/*
+*
+*/
+void cHydrosphereModel::RK_RHS_3D_Hydrosphere(int i, int j, int k){
+    double cc = - 1.;  // factor leads to better results(adapted method)
+//    double cc = - 2.;  // factor leads to better results 
+//  (Reinout vander Meulen, The immersed Boundary Method for the Incompressible Navier-Stokes Equations)
+//    double dr_rm = dr * L_hyd/(double)(im-1);
+//    double dr2 = dr_rm * dr_rm;
+    double dr2 = dr * dr;
+    double dthe2 = dthe * dthe;
+    double dphi2 = dphi * dphi;
+    double rm = rad.z[i] * L_hyd;
+    double rm2 = rm * rm;
+    double sinthe = 0.;
+    if(j <= 90)
+        sinthe = sin(the.z[j]);
+    if(j > 90){
+        int j_rev = 90 - fabs(j - 90);
+            sinthe = sin(the.z[j_rev]);
+    }
+    if(sinthe == 0.)  sinthe = 1.e-5;
+/*
+    double U_10 = sqrt(v_wind.y[j][k] * v_wind.y[j][k] 
+        + w_wind.y[j][k] * w_wind.y[j][k]); // in m/s, dimensional surface wind velocity U_10 in m/s
+    double D_E = 7.6/sqrt(sinthe) * U_10; // dimensional surface wind velocity U_10 in m/s
+    int i_Ekman = int(D_E/L_hyd * (double)i_max);
+*/
+    double sinthe2 = sinthe * sinthe;
+    double costhe = cos(the.z[j]);
+    double rmsinthe = rm * sinthe;
+    double rm2sinthe = rm2 * sinthe;
+    double rm2sinthe2 = rm2 * sinthe2;
+    double dist = 0;
+    double h_0_i = 0, h_d_i = 0;
+    double h_0_j = 0, h_d_j = 0;
+    double h_0_k = 0, h_d_k = 0;
+    if(is_water(h, i, j, k)){
+        h_0_i = h_0_j = h_0_k = 0.;
+        h_d_i = h_d_j = h_d_k = 1.; 
+    }
+    if(is_land(h, i, j, k)){
+        h_0_i = h_0_j = h_0_k = 1.;
+        h_d_i = h_d_j = h_d_k = 0.; 
+    }
+    double topo_step = L_hyd/(double)(im-1);
+    double height = L_hyd - (double)i * topo_step;
+    double dist_coeff = 0.;
+//    double dist_coeff = .5;
+    double topo_diff = fabs(height - Bathymetry.y[j][k]);
+    if((topo_diff <= topo_step)&&((is_water(h, i, j, k)) 
+        &&(is_land(h, i-1, j, k)))){
+//        double h_0_i = .5 *(acos(topo_diff * 3.14/L_hyd) + 1.);   // cosine distribution function, better results for benchmark case
+        h_0_i = topo_diff/topo_step;  // hat distribution function
+        h_d_i = 1. - h_0_i; 
+    }else{
+        h_0_i = 0.;
+        h_d_i = 1. - h_0_i; 
+    }
+    if((is_water(h, i, j, k))&&(is_land(h, i, j+1, k))){ 
+        dist = dist_coeff * dthe;
+        h_0_j = dist/dthe;
+        h_d_j = 1. - h_0_j; 
+    }
+    if((is_water(h, i, j, k))&&(is_land(h, i, j-1, k))){
+        dist = dist_coeff * dthe;
+        h_0_j = dist/dthe;
+        h_d_j = 1. - h_0_j; 
+    }
+    if((is_water(h, i, j, k))&&(is_land(h, i, j, k+1))){
+        dist = dist_coeff * dphi;
+        h_0_k = dist/dphi;
+        h_d_k = 1. - h_0_k; 
+    }
+    if((is_water(h, i, j, k))&&(is_land(h, i, j, k-1))){
+        dist = dist_coeff * dphi;
+        h_0_k = dist/dphi;
+        h_d_k = 1. - h_0_k; 
+    }
+    std::vector<Array*> arrays_1{&u, &v, &w, &t, &p_dyn, &c};
+    std::vector<Array*> arrays_2{&u, &v, &w, &t, &c};
+    enum array_index_1{i_u_1, i_v_1, i_w_1, i_t_1, i_p_1, i_c_1, 
+        last_array_index_1};
+    enum array_index_2{i_u_2, i_v_2, i_w_2, i_t_2, i_c_2,
+        last_array_index_2};
+    std::vector<double> dxdr_vals(last_array_index_1), 
+                        dxdthe_vals(last_array_index_1), 
+                        dxdphi_vals(last_array_index_1),
+                        d2xdr2_vals(last_array_index_2),
+                        d2xdthe2_vals(last_array_index_2),
+                        d2xdphi2_vals(last_array_index_2);
+    bool r_flag = false , the_flag = false, phi_flag = false;
+    if(i < im-2){
+        if((is_land(h, i, j, k))&&(is_water(h, i+1, j, k))){
+            for(int n=0; n<last_array_index_1; n++)
+                dxdr_vals[n] = dxdr_b(arrays_1[n]);
+            for(int n=0; n<last_array_index_2; n++)
+                d2xdr2_vals[n] = d2xdr2_b(arrays_2[n]);
+            r_flag = true;
+        }
+    }
+    if((j >= 2)&&(j < jm-3)){
+        if((is_land(h, i, j, k))&&((is_water(h, i, j+1, k)) 
+            &&(is_water(h, i, j+2, k)))){
+            for(int n=0; n<last_array_index_1; n++)
+                dxdthe_vals[n] = dxdthe_b(arrays_1[n]);
+            for(int n=0; n<last_array_index_2; n++)
+                d2xdthe2_vals[n] = d2xdthe2_b(arrays_2[n]);
+            the_flag = true;
+        }
+        if((is_land(h, i, j, k))&&(is_water(h, i, j-1, k)) 
+            &&(is_water(h, i, j-2, k))){
+            for(int n=0; n<last_array_index_1; n++)
+                dxdthe_vals[n] = dxdthe_c(arrays_1[n]);
+            for(int n=0; n<last_array_index_2; n++)
+                d2xdthe2_vals[n] = d2xdthe2_c(arrays_2[n]);
+            the_flag = true;
+        }
+        if(((is_land(h, i, j, k)) 
+                &&((is_water(h, i, j+1, k))&&(is_land(h, i, j+2, k)))) 
+                ||((j == jm-2)
+                &&((is_water(h, i, j, k))&&(is_land(h, i, j+1, k))))){
+            for(int n=0; n<last_array_index_1; n++)
+                dxdthe_vals[n] = dxdthe_d(arrays_1[n]);
+            for(int n=0; n<last_array_index_2; n++)
+                d2xdthe2_vals[n] = 0.;
+            the_flag = true;
+        }
+        if(((is_land(h, i, j, k)) 
+                &&((is_water(h, i, j-1, k))&&(is_land(h, i, j-2, k)))) 
+                ||((j == 1)&&((is_land(h, i, j, k)) 
+                &&(is_water(h, i, j-1, k))))){
+            for(int n=0; n<last_array_index_1; n++)
+                dxdthe_vals[n] = dxdthe_e(arrays_1[n]);
+            for(int n=0; n<last_array_index_2; n++)
+                d2xdthe2_vals[n] = 0.;
+            the_flag = true;
+        }
+    }
+    if((k >= 2)&&(k < km-3)){
+        if((is_land(h, i, j, k))&&(is_water(h, i, j, k+1)) 
+            &&(is_water(h, i, j, k+2))){
+            for(int n=0; n<last_array_index_1; n++)
+                dxdphi_vals[n] = dxdphi_b(arrays_1[n]);
+            for(int n=0; n<last_array_index_2; n++)
+                d2xdphi2_vals[n] = d2xdphi2_b(arrays_2[n]);
+            phi_flag = true;
+        }
+        if((is_land(h, i, j, k))&&(is_water(h, i, j, k-1)) 
+            &&(is_water(h, i, j, k-2))){
+            for(int n=0; n<last_array_index_1; n++)
+                dxdphi_vals[n] = dxdphi_c(arrays_1[n]);
+            for(int n=0; n<last_array_index_2; n++)
+                d2xdphi2_vals[n] = d2xdphi2_c(arrays_2[n]);
+            phi_flag = true;
+        }
+        if(((is_land(h, i, j, k))&&((is_water(h, i, j, k+1)) 
+            &&(is_land(h, i, j, k+2))))||((k == km-2)
+            &&((is_water(h, i, j, k))&&(is_land(h, i, j, k+1))))){
+            for(int n=0; n<last_array_index_1; n++)
+                dxdphi_vals[n] = dxdphi_d(arrays_1[n]);
+            for(int n=0; n<last_array_index_2; n++)
+                d2xdphi2_vals[n] = 0.;
+            phi_flag = true;
+        }
+        if(((is_land(h, i, j, k)) 
+                &&((is_water(h, i, j, k-1))&&(is_land(h, i, j, k-2)))) 
+                ||((k == 1)&&((is_land(h, i, j, k)) 
+                &&(is_water(h, i, j, k-1))))){
+            for(int n=0; n<last_array_index_1; n++)
+                dxdphi_vals[n] = dxdphi_e(arrays_1[n]);
+            for(int n=0; n<last_array_index_2; n++)
+                d2xdphi2_vals[n] = 0.;
+            phi_flag = true;
+        }
+    }
+    for(int n=0; n<last_array_index_1; n++){
+        if(!r_flag) dxdr_vals[n] = dxdr_a(arrays_1[n]);
+        if(!the_flag) dxdthe_vals[n] = dxdthe_a(arrays_1[n]);
+        if(!phi_flag) dxdphi_vals[n] = dxdphi_a(arrays_1[n]);
+    }
+    for(int n=0; n<last_array_index_2; n++){
+        if(!r_flag) d2xdr2_vals[n] = d2xdr2_a(arrays_2[n]);
+        if(!the_flag) d2xdthe2_vals[n] = d2xdthe2_a(arrays_2[n]);
+        if(!phi_flag) d2xdphi2_vals[n] = d2xdphi2_a(arrays_2[n]);
+    }
+    double dudr = dxdr_vals[i_u_1], dvdr = dxdr_vals[i_v_1], dwdr = dxdr_vals[i_w_1], dtdr = dxdr_vals[i_t_1],
+           dpdr = dxdr_vals[i_p_1], dcdr = dxdr_vals[i_c_1];
+    double dudthe = dxdthe_vals[i_u_1], dvdthe = dxdthe_vals[i_v_1], dwdthe = dxdthe_vals[i_w_1], dtdthe = dxdthe_vals[i_t_1],
+           dpdthe = dxdthe_vals[i_p_1], dcdthe = dxdthe_vals[i_c_1];
+    double dudphi = dxdphi_vals[i_u_1], dvdphi = dxdphi_vals[i_v_1], dwdphi = dxdphi_vals[i_w_1], dtdphi = dxdphi_vals[i_t_1],
+           dpdphi = dxdphi_vals[i_p_1], dcdphi = dxdphi_vals[i_c_1];
+    double d2udr2 = d2xdr2_vals[i_u_2], d2vdr2 = d2xdr2_vals[i_v_2], d2wdr2 = d2xdr2_vals[i_w_2], d2tdr2 = d2xdr2_vals[i_t_2],
+           d2cdr2 = d2xdr2_vals[i_c_2];
+    double d2udthe2 = d2xdthe2_vals[i_u_2], d2vdthe2 = d2xdthe2_vals[i_v_2], d2wdthe2 = d2xdthe2_vals[i_w_2], d2tdthe2 = d2xdthe2_vals[i_t_2],
+           d2cdthe2 = d2xdthe2_vals[i_c_2];
+    double d2udphi2 = d2xdphi2_vals[i_u_2], d2vdphi2 = d2xdphi2_vals[i_v_2], d2wdphi2 = d2xdphi2_vals[i_w_2], d2tdphi2 = d2xdphi2_vals[i_t_2],
+           d2cdphi2 = d2xdphi2_vals[i_c_2];
 
-RHS_Hydrosphere::RHS_Hydrosphere ( int im, int jm, int km, double r0, double dt, double dr, double dthe, double dphi, double re, double ec, double sc, double g, double pr, double omega, double coriolis, double centrifugal, double buoyancy )
-{
-	this-> im = im;
-	this-> jm = jm;
-	this-> km = km;
-	this-> r0 = r0;
-	this-> dt = dt;
-	this-> dr = dr;
-	this-> dthe = dthe;
-	this-> dphi = dphi;
-	this-> re = re;
-	this-> ec = ec;
-	this-> sc = sc;
-	this-> g = g;
-	this-> pr = pr;
-	this-> omega = omega;
-	this-> coriolis = coriolis;
-	this-> centrifugal = centrifugal;
-	this-> buoyancy = buoyancy;
+    double coeff_p = 1./r_0_water; // coefficient allows the dynamic pressure term
+    double coeff_g_p = 1.; // coefficient allows the buoyancy term
+//    double coeff_g_p = 0.; // coefficient allows the buoyancy term
+//    double coeff_g_p = L_hyd/(r_salt_water.x[i][j][k] * u_0 * u_0); // coefficient allows the buoyancy term
+    double coeff_energy_p = u_0 * u_0/(cp_w * t_0); // coefficient for the source term = 2.33e-4
+    // buoyancy effects by salt water density changes
+    double drodc = .7;    // gradient given in kg/m³/m
+    double salt_water_ref = r_water.x[i][j][k] + drodc * c.x[i][j][k] * c_0;
+                          // common linear approach for salt water based on fresh water
+//    double coeff_buoy = L_hyd/(u_0 * u_0); // coefficient for the buoyancy term == 16.0
+    double coeff_buoy = r_0_water * (u_0 * u_0)/L_hyd; // coefficient for bouancy term = 0.2871
+//    double coeff_buoy = 0.; // coefficient for the buoyancy term == 16.0
+    // Boussineq-approximation for the buoyancy force caused by salinity, higher salinity causes negative buoyancy
+//    BuoyancyForce.x[i][j][k] = buoyancy * coeff_buoy * t.x[i][j][k] * g;
+    BuoyancyForce.x[i][j][k] = - buoyancy * coeff_buoy * t.x[i][j][k] * g;
+    PressureGradientForce.x[i][j][k] = - coeff_buoy * coeff_p * dpdr;
+    Salt_Balance.x[i][j][k] = salt_water_ref - r_salt_water.x[i][j][k]; // difference of salinity compared to average
+    if(Salt_Balance.x[i][j][k] < 0.){
+        Salt_Diffusion.x[i][j][k] = Salt_Balance.x[i][j][k]; // for negativ salinity balance, higher than reference
+        Salt_Finger.x[i][j][k] = 0.;
+    }else{
+        Salt_Finger.x[i][j][k] = Salt_Balance.x[i][j][k]; // for positiv salinity balance, lower than reference
+        Salt_Diffusion.x[i][j][k] = 0.;
+    }
+    double coriolis = 1.;
+    double sinthe_coriolis = sinthe;
+    double coriolis_rad = h_d_i * coriolis * 2. * omega
+        * costhe * w.x[i][j][k];
+    double coriolis_the = - h_d_j * coriolis * 2. * omega
+        * sinthe_coriolis * w.x[i][j][k];
+    double coriolis_phi = h_d_k * coriolis * 2. * omega
+        * (sinthe_coriolis * v.x[i][j][k] - costhe * u.x[i][j][k]);
+//    CoriolisForce.x[i][j][k] = coriolis_rad/omega;
+    CoriolisForce.x[i][j][k] = sqrt((pow (coriolis_rad, 2) 
+        + pow (coriolis_the, 2) + pow (coriolis_phi, 2))/3.);
+    if(is_land(h, i, j, k)){
+        BuoyancyForce.x[i][j][k] = - buoyancy * coeff_buoy * 1. * g;
+        PressureGradientForce.x[i][j][k] = 0.;
+        CoriolisForce.x[i][j][k] = 0.;
+    }
 
+    rhs_t.x[i][j][k] = - (u.x[i][j][k] * dtdr + v.x[i][j][k] * dtdthe/rm 
+        + w.x[i][j][k] * dtdphi/rmsinthe) 
+        + (d2tdr2 + dtdr * 2./rm + d2tdthe2/rm2 
+        + dtdthe * costhe/rm2sinthe + d2tdphi2/rm2sinthe2)/(re * pr)
+        + coeff_energy_p * (u.x[i][j][k] * dpdr 
+        + v.x[i][j][k]/rm * dpdthe 
+        + w.x[i][j][k]/rmsinthe * dpdphi);
+    rhs_u.x[i][j][k] = - (u.x[i][j][k] * dudr + v.x[i][j][k] * dudthe/rm 
+        + w.x[i][j][k] * dudphi/rmsinthe) 
+//        + coeff_g_p * t.x[i][j][k] * g
+        - coeff_g_p * t.x[i][j][k] * g
+        - coeff_p * dpdr
+        + (d2udr2 + h_d_i * 2. * u.x[i][j][k]/rm2 + d2udthe2/rm2 
+        + 4. * dudr/rm + dudthe * costhe/rm2sinthe 
+        + d2udphi2/rm2sinthe2)/re 
+        + coriolis_rad
+        + cc * h_0_i * u.x[i][j][k]/dr2;
+    rhs_v.x[i][j][k] = - (u.x[i][j][k] * dvdr + v.x[i][j][k] * dvdthe/rm 
+        + w.x[i][j][k] * dvdphi/rmsinthe) 
+        - coeff_p * dpdthe/rm
+        + (d2vdr2 + dvdr * 2./rm + d2vdthe2/rm2 
+        + dvdthe/rm2sinthe * costhe 
+        - (1. + costhe * costhe/(rm * sinthe2)) * h_d_j * v.x[i][j][k] 
+        + d2vdphi2/rm2sinthe2 + 2. * dudthe/rm2 
+        - dwdphi * 2. * costhe/rm2sinthe2)/re 
+        + coriolis_the
+        + cc * h_0_j * v.x[i][j][k]/dthe2;
+    rhs_w.x[i][j][k] = - (u.x[i][j][k] * dwdr + v.x[i][j][k] * dwdthe/rm 
+        + w.x[i][j][k] * dwdphi/rmsinthe) 
+        - coeff_p * dpdphi/rmsinthe
+        + (d2wdr2 + dwdr * 2./rm + d2wdthe2/rm2 
+        + dwdthe/rm2sinthe * costhe 
+        - (1. + costhe * costhe/sinthe2) * h_d_k * w.x[i][j][k] 
+        + d2wdphi2/rm2sinthe2 + 2. * dudphi/rm2sinthe 
+        + dvdphi * 2. * costhe/rm2sinthe2)/re 
+        + coriolis_phi
+        + cc * h_0_k * w.x[i][j][k]/dphi2;
+    rhs_c.x[i][j][k] = - (u.x[i][j][k] * dcdr + v.x[i][j][k] * dcdthe/rm 
+        + w.x[i][j][k] * dcdphi/rmsinthe) 
+        + (d2cdr2 + dcdr * 2./rm + d2cdthe2/rm2 
+        + dcdthe * costhe/rm2sinthe + d2cdphi2/rm2sinthe2)/(sc * re);
+    aux_u.x[i][j][k] = rhs_u.x[i][j][k] + coeff_p * dpdr;
+    aux_v.x[i][j][k] = rhs_v.x[i][j][k] + coeff_p * dpdthe/rm;
+    aux_w.x[i][j][k] = rhs_w.x[i][j][k] + coeff_p * dpdphi/rmsinthe;
+    if(is_land(h, i, j, k)){
+        rhs_u.x[i][j][k] = rhs_v.x[i][j][k] = rhs_w.x[i][j][k] = 
+            rhs_t.x[i][j][k] = rhs_c.x[i][j][k] = 0.;
+        aux_u.x[i][j][k] = aux_v.x[i][j][k] = aux_w.x[i][j][k] = 0.;
+    }
+/*
+    double residuum = (u.x[i][j][k] - u.x[i-1][j][k])/dr 
+        + ((v.x[i-1][j+1][k] - v.x[i-1][j-1][k])
+        /(2. * rm * dthe) 
+        + (w.x[i-1][j][k+1] - w.x[i-1][j][k-1])
+        /(2. * rmsinthe * dphi));
+*/
+/*
+    cout.precision(8);
+//    if((j == 75) &&(k == 180)) cout << "Ocean code" << endl
+//        << "northern hemisphere" << endl
+        << "   i = " << i << "   j = " << j << "   k = " << k  << endl
+//        << "   i_Ekman = " << i_Ekman << endl 
+        << "   dt = " << dt 
+        << "   dr = " << dr 
+        << "   dthe = " << dthe 
+        << "   dphi = " << dphi
+        << "   dr2 = " << dr2 
+        << "   dthe2 = " << dthe2 
+        << "   dphi2 = " << dphi2 << endl
+        << "   rm > rad = " << rm 
+        << "   sinthe = " << sinthe
+        << "   sinthe2 = " << sinthe2
+        << "   costhe = " << costhe
+        << "   rmsinthe = " << rmsinthe
+        << "   rm2sinthe = " << rm2sinthe
+        << "   rm2sinthe2 = " << rm2sinthe2 << endl
+        << "   topo_step = " << topo_step
+        << "   height = " << height
+        << "   Bathymetry = " << Bathymetry.y[j][k]
+        << "   topo_diff = " << topo_diff << endl
+        << "   h_0_i = " << h_0_i
+        << "   h_d_i = " << h_d_i << endl
+        << "   residuum = " << residuum << endl
+        << "   dpdr = " << dpdr
+        << "   dtdr = " << dtdr
+        << "   dudr = " << dudr
+        << "   dvdr = " << dvdr
+        << "   dwdr = " << dwdr
+        << "   dcdr = " << dcdr << endl
+        << "   dpdthe = " << dpdthe
+        << "   dtdthe = " << dtdthe
+        << "   dudthe = " << dudthe
+        << "   dvdthe = " << dvdthe
+        << "   dwdthe = " << dwdthe
+        << "   dcdthe = " << dcdthe << endl
+        << "   dpdphi = " << dpdphi
+        << "   dtdphi = " << dtdphi
+        << "   dudphi = " << dudphi
+        << "   dvdphi = " << dvdphi
+        << "   dwdphi = " << dwdphi
+        << "   dcdphi = " << dcdphi << endl
+
+        << "   ti-1 = " << t.x[i-1][j][k]
+        << "   ui-1 = " << u.x[i-1][j][k]
+        << "   vi-1 = " << v.x[i-1][j][k]
+        << "   wi-1 = " << w.x[i-1][j][k]
+        << "   ci-1 = " << t.x[i-1][j][k] << endl
+
+        << "   ti   = " << t.x[i][j][k]
+        << "   ui   = " << u.x[i][j][k]
+        << "   vi   = " << v.x[i][j][k]
+        << "   wi  = " << w.x[i][j][k]
+        << "   ci   = " << t.x[i][j][k] << endl
+
+        << "   ti+1 = " << t.x[i+1][j][k]
+        << "   ui+1 = " << u.x[i+1][j][k]
+        << "   vi+1 = " << v.x[i+1][j][k]
+        << "   wi+1 = " << w.x[i+1][j][k]
+        << "   ci+1 = " << t.x[i+1][j][k] << endl
+
+        << "   tj-1 = " << t.x[i][j-1][k]
+        << "   uj-1 = " << u.x[i][j-1][k]
+        << "   vj-1 = " << v.x[i][j-1][k]
+        << "   wj-1 = " << w.x[i][j-1][k]
+        << "   cj-1 = " << t.x[i][j-1][k] << endl
+
+        << "   tj   = " << t.x[i][j][k]
+        << "   uj   = " << u.x[i][j][k]
+        << "   vj   = " << v.x[i][j][k]
+        << "   wj   = " << w.x[i][j][k]
+        << "   cj   = " << t.x[i][j][k] << endl
+
+        << "   tj+1 = " << t.x[i][j+1][k]
+        << "   uj+1 = " << u.x[i][j+1][k]
+        << "   vj+1 = " << v.x[i][j+1][k]
+        << "   wj+1 = " << w.x[i][j+1][k]
+        << "   cj+1 = " << t.x[i][j+1][k] << endl
+
+        << "   tk-1 = " << t.x[i][j][k-1]
+        << "   uk-1 = " << u.x[i][j][k-1]
+        << "   vk-1 = " << v.x[i][j][k-1]
+        << "   wk-1 = " << w.x[i][j][k-1]
+        << "   ck-1 = " << t.x[i][j][k-1] << endl
+
+        << "   tk   = " << t.x[i][j][k]
+        << "   uk   = " << u.x[i][j][k]
+        << "   vk   = " << v.x[i][j][k]
+        << "   wk   = " << w.x[i][j][k]
+        << "   ck   = " << t.x[i][j][k] << endl
+
+        << "   tk+1 = " << t.x[i][j][k+1]
+        << "   uk+1 = " << u.x[i][j][k+1]
+        << "   vk+1 = " << v.x[i][j][k+1]
+        << "   wk+1 = " << w.x[i][j][k+1]
+        << "   ck+1 = " << t.x[i][j][k+1] << endl
+
+        << "   tn = " << tn.x[i][j][k]
+        << "   un = " << un.x[i][j][k]
+        << "   vn = " << vn.x[i][j][k]
+        << "   wn = " << wn.x[i][j][k]
+        << "   cn = " << cn.x[i][j][k] << endl
+
+        << "   rhs_t = " << rhs_t.x[i][j][k]
+        << "   rhs_u = " << rhs_u.x[i][j][k]
+        << "   rhs_v = " << rhs_v.x[i][j][k]
+        << "   rhs_w = " << rhs_w.x[i][j][k]
+        << "   rhs_c = " << rhs_t.x[i][j][k] << endl;
+*/
 }
-
-
-RHS_Hydrosphere::~RHS_Hydrosphere() {}
-
-
-void RHS_Hydrosphere::RK_RHS_3D_Hydrosphere ( int i, int j, int k, double L_hyd, double g, double cp_w, double u_0, double t_0, double c_0, double r_0_water, double ta, double pa, double ca, Array_1D &rad, Array_1D &the, Array_1D &phi, Array &h, Array &t, Array &u, Array &v, Array &w, Array &p_dyn, Array &c, Array &tn, Array &un, Array &vn, Array &wn, Array &cn, Array &rhs_t, Array &rhs_u, Array &rhs_v, Array &rhs_w, Array &rhs_c, Array &aux_u, Array &aux_v, Array &aux_w, Array &Salt_Finger, Array &Salt_Diffusion, Array &BuoyancyForce_3D, Array &Salt_Balance )
-{
-
-// collection of coefficients for phase transformation
-
-	L_hyd = L_hyd / ( im - 1 );														// characteristic length for non-dimensionalisation
-
-	c43 = 4. / 3.;
-	c13 = 1. / 3.;
-
-
-//	k_Force = 1.;																			// factor for accelleration of convergence processes inside the immersed boundary conditions
-	k_Force = 10.;																			// factor for accelleration of convergence processes inside the immersed boundary conditions
-
-	cc = + 1.;
-
-	h_check_i = h_check_j = h_check_k = 0;
-
-
-// 1. and 2. derivatives for 3 spacial directions and and time in Finite Difference Methods ( FDM )
-
-// collection of coefficients
-	dr2 = dr * dr;
-	dthe2 = dthe * dthe;
-	dphi2 = dphi * dphi;
-
-// collection of coefficients
-//	rm = rad.z[ i ];
-	rm = rad.z[ i ] / r0;
-	rm2 = rm * rm;
-
-// collection of coefficients
-	sinthe = sin( the.z[ j ] );
-	sinthe2 = sinthe * sinthe;
-	costhe = cos( the.z[ j ] );
-	cotthe = cos( the.z[ j ] ) / sin( the.z[ j ] );
-	rmsinthe = rm * sinthe;
-	rm2sinthe = rm2 * sinthe;
-	rm2sinthe2 = rm2 * sinthe2;
-
-
-//  3D volume iterations in case 1. and 2. order derivatives at walls are needed >>>>>>>>>>>>>>>>>>>>>>>>
-// only in positive r-direction above ground 
-
-	if ( ( h.x[ i - 1 ][ j ][ k ] == 1. ) && ( h.x[ i ][ j ][ k ] == 0. ) )
-	{
-		h_0_i = ( double ) ( i ) * dr - dr / 4.;
-
-		if ( fabs ( ( ( double ) ( i + 1 ) * dr - h_0_i ) ) < dr )
-		{
-			h_c_i = cc * ( 1. - fabs ( ( ( double ) ( i + 1 ) * dr - h_0_i ) ) / dr ); 
-//			h_c_i = cc * ( .5 * ( acos ( fabs ( ( double ) ( i + 1 ) * dr - h_0_i ) * 3.14 / dr ) + 1. ) ); 
-			h_d_i = 1. - h_c_i;
-			h_check_i = 1;
-		}
-	}
-
-
-// 3D adapted immersed boundary method >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-// only in positive the-direction along northerly boundaries 
-
-	if ( ( h.x[ i ][ j - 1 ][ k ] == 1. ) && ( h.x[ i ][ j ][ k ] == 0. ) )
-	{
-		h_0_j = ( double ) ( j ) * dthe + dthe / 4.;
-
-		if ( fabs ( ( ( double ) ( j + 1 ) * dthe - h_0_j ) ) < dthe )
-		{
-			h_c_j = cc * ( 1. - fabs ( ( ( double ) ( j + 1 ) * dthe - h_0_j ) ) / dthe ); 
-//			h_c_j = cc * ( .5 * ( acos ( fabs ( ( double ) ( j + 1 ) * dthe - h_0_j ) * 3.14 / dthe ) + 1. ) ); 
-			h_d_j = 1. - h_c_j;
-			h_check_j = 1;
-		}
-	}
-
-
-// 3D adapted immersed boundary method >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-// only in negative the-direction along southerly boundaries 
-
-	if ( ( h.x[ i ][ j +1 ][ k ] == 1. ) && ( h.x[ i ][ j ][ k ] == 0. ) )
-	{
-		h_0_j = ( double ) ( j ) * dthe - dthe / 4.;
-
-		if ( fabs ( ( ( double ) ( j - 1 ) * dthe - h_0_j ) ) < dthe )
-		{
-			h_c_j = cc * ( 1. - fabs ( ( ( double ) ( j - 1 ) * dthe - h_0_j ) ) / dthe ); 
-//			h_c_j = cc * ( .5 * ( acos ( fabs ( ( double ) ( j - 1 ) * dthe - h_0_j ) * 3.14 / dthe ) + 1. ) ); 
-			h_d_j = 1. - h_c_j;
-			h_check_j = 1;
-		}
-	}
-
-
-// 3D adapted immersed boundary method >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-// only in positive phi-direction on westerly boundaries 
-
-	if ( ( h.x[ i ][ j ][ k - 1 ] == 1. ) && ( h.x[ i ][ j ][ k ] == 0. ) )
-	{
-		h_0_k = ( double ) ( k ) * dphi + dphi / 4.;
-
-		if ( fabs ( ( ( double ) ( k + 1 ) * dphi - h_0_k ) ) < dphi )
-		{
-			h_c_k = cc * ( 1. - fabs ( ( ( double ) ( k + 1 ) * dphi - h_0_k ) ) / dphi ); 
-//			h_c_k = cc * ( .5 * ( acos ( fabs ( ( double ) ( k + 1 ) * dphi - h_0_k ) * 3.14 / dphi ) + 1. ) ); 
-			h_d_k = 1. - h_c_k;
-			h_check_k = 1;
-		}
-	}
-
-
-// 3D adapted immersed boundary method >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-// only in negative phi-direction along easterly boundaries 
-
-	if ( ( h.x[ i ][ j ][ k + 1 ] == 1. ) && ( h.x[ i ][ j ][ k ] == 0. ) )
-	{
-		h_0_k = ( double ) ( k ) * dphi - dphi / 4.;
-
-		if ( fabs ( ( ( double ) ( k - 1 ) * dphi - h_0_k ) ) < dphi )
-		{
-			h_c_k = cc * ( 1. - fabs ( ( ( double ) ( k - 1 ) * dphi - h_0_k ) ) / dphi ); 
-//			h_c_k = cc * ( .5 * ( acos ( fabs ( ( double ) ( k - 1 ) * dphi - h_0_k ) * 3.14 / dphi ) + 1. ) ); 
-			h_d_k = 1. - h_c_k;
-			h_check_k = 1;
-		}
-	}
-
-
-		if ( ( h.x[ i ][ j ][ k ] == 0. ) && ( h_check_i != 1 ) )
-		{
-			h_c_i = 0.; 
-			h_d_i = 1. - h_c_i;
-		}
-
-		if ( ( h.x[ i ][ j ][ k ] == 1. ) && ( h_check_i != 1 ) )
-		{
-			h_c_i = 1.; 
-			h_d_i = 1. - h_c_i;
-		}
-
-
-		if ( ( h.x[ i ][ j ][ k ] == 0. ) && ( h_check_j != 1 ) )
-		{
-			h_c_j = 0.; 
-			h_d_j = 1. - h_c_j;
-		}
-
-		if ( ( h.x[ i ][ j ][ k ] == 1. ) && ( h_check_j != 1 ) )
-		{
-			h_c_j = 1.; 
-			h_d_j = 1. - h_c_j;
-		}
-
-
-		if ( ( h.x[ i ][ j ][ k ] == 0. ) && ( h_check_k != 1 ) )
-		{
-			h_c_k = 0.; 
-			h_d_k = 1. - h_c_k;
-		}
-
-		if ( ( h.x[ i ][ j ][ k ] == 1. ) && ( h_check_k != 1 ) )
-		{
-			h_c_k = 1.; 
-			h_d_k = 1. - h_c_k;
-		}
-
-
-
-// 1. order derivative for temperature, pressure, salt concentrations and velocity components
-
-// computation of initial and boundary conditions for the v and w velocity component
-// computation at the surface
-
-//  3D volume iterations
-
-// 1st order derivative for temperature, pressure, water vapour and co2 concentrations and velocity components
-
-	dudr = h_d_i * ( u.x[ i+1 ][ j ][ k ] - u.x[ i-1 ][ j ][ k ] ) / ( 2. * dr );
-	dvdr = h_d_i * ( v.x[ i+1 ][ j ][ k ] - v.x[ i-1 ][ j ][ k ] ) / ( 2. * dr );
-	dwdr = h_d_i * ( w.x[ i+1 ][ j ][ k ] - w.x[ i-1 ][ j ][ k ] ) / ( 2. * dr );
-	dtdr = h_d_i * ( t.x[ i+1 ][ j ][ k ] - t.x[ i-1 ][ j ][ k ] ) / ( 2. * dr );
-	dpdr = h_d_i * ( p_dyn.x[ i+1 ][ j ][ k ] - p_dyn.x[ i-1 ][ j ][ k ] ) / ( 2. * dr );
-	dcdr = h_d_i * ( c.x[ i+1 ][ j ][ k ] - c.x[ i-1 ][ j ][ k ] ) / ( 2. * dr );
-
 /*
-	dudr = h_d_i * ( u.x[ i+1 ][ j ][ k ] - u.x[ i-1 ][ j ][ k ] ) / ( 2. * dr ) * rm_1;
-	dvdr = h_d_i * ( v.x[ i+1 ][ j ][ k ] - v.x[ i-1 ][ j ][ k ] ) / ( 2. * dr ) * rm_1;
-	dwdr = h_d_i * ( w.x[ i+1 ][ j ][ k ] - w.x[ i-1 ][ j ][ k ] ) / ( 2. * dr ) * rm_1;
-	dtdr = h_d_i * ( t.x[ i+1 ][ j ][ k ] - t.x[ i-1 ][ j ][ k ] ) / ( 2. * dr ) * rm_1;
-	dpdr = h_d_i * ( p_dyn.x[ i+1 ][ j ][ k ] - p_dyn.x[ i-1 ][ j ][ k ] ) / ( 2. * dr ) * rm_1;
-	dcdr = h_d_i * ( c.x[ i+1 ][ j ][ k ] - c.x[ i-1 ][ j ][ k ] ) / ( 2. * dr ) * rm_1;
+*
 */
-	dudthe = h_d_j * ( u.x[ i ][ j+1 ][ k ] - u.x[ i ][ j-1 ][ k ] ) / ( 2. * dthe );
-	dvdthe = h_d_j * ( v.x[ i ][ j+1 ][ k ] - v.x[ i ][ j-1 ][ k ] ) / ( 2. * dthe );
-	dwdthe = h_d_j * ( w.x[ i ][ j+1 ][ k ] - w.x[ i ][ j-1 ][ k ] ) / ( 2. * dthe );
-	dtdthe = h_d_j * ( t.x[ i ][ j+1 ][ k ] - t.x[ i ][ j-1 ][ k ] ) / ( 2. * dthe );
-	dpdthe = h_d_j * ( p_dyn.x[ i ][ j+1 ][ k ] - p_dyn.x[ i ][ j-1 ][ k ] ) / ( 2. * dthe );
-	dcdthe = h_d_j * ( c.x[ i ][ j+1 ][ k ] - c.x[ i ][ j-1 ][ k ] ) / ( 2. * dthe );
-
-	dudphi = h_d_k * ( u.x[ i ][ j ][ k+1 ] - u.x[ i ][ j ][ k-1 ] ) / ( 2. * dphi );
-	dvdphi = h_d_k * ( v.x[ i ][ j ][ k+1 ] - v.x[ i ][ j ][ k-1 ] ) / ( 2. * dphi );
-	dwdphi = h_d_k * ( w.x[ i ][ j ][ k+1 ] - w.x[ i ][ j ][ k-1 ] ) / ( 2. * dphi );
-	dtdphi = h_d_k * ( t.x[ i ][ j ][ k+1 ] - t.x[ i ][ j ][ k-1 ] ) / ( 2. * dphi );
-	dpdphi = h_d_k * ( p_dyn.x[ i ][ j ][ k+1 ] - p_dyn.x[ i ][ j ][ k-1 ] ) / ( 2. * dphi );
-	dcdphi = h_d_k * ( c.x[ i ][ j ][ k+1 ] - c.x[ i ][ j ][ k-1 ] ) / ( 2. * dphi );
-
-// 2nd order derivative for temperature, pressure, water vapour and co2 concentrations and velocity components
-
-	d2udr2 = h_d_i * ( u.x[ i+1 ][ j ][ k ] - 2. * u.x[ i ][ j ][ k ] + u.x[ i-1 ][ j ][ k ] ) / dr2;
-	d2vdr2 = h_d_i * ( v.x[ i+1 ][ j ][ k ] - 2. * v.x[ i ][ j ][ k ] + v.x[ i-1 ][ j ][ k ] ) / dr2;
-	d2wdr2 = h_d_i * ( w.x[ i+1 ][ j ][ k ] - 2. * w.x[ i ][ j ][ k ] + w.x[ i-1 ][ j ][ k ] ) / dr2;
-	d2tdr2 = h_d_i * ( t.x[ i+1 ][ j ][ k ] - 2. * t.x[ i ][ j ][ k ] + t.x[ i-1 ][ j ][ k ] ) / dr2;
-	d2cdr2 = h_d_i * ( c.x[ i+1 ][ j ][ k ] - 2. * c.x[ i ][ j ][ k ] + c.x[ i-1 ][ j ][ k ] ) / dr2;
-
-/*
-	d2udr2 = h_d_i * ( u.x[ i+1 ][ j ][ k ] - 2. * u.x[ i ][ j ][ k ] + u.x[ i-1 ][ j ][ k ] ) / dr2 * rm_2 - 2. / rm_1 * dudr;
-	d2vdr2 = h_d_i * ( v.x[ i+1 ][ j ][ k ] - 2. * v.x[ i ][ j ][ k ] + v.x[ i-1 ][ j ][ k ] ) / dr2 * rm_2 - 2. / rm_1 * dvdr;
-	d2wdr2 = h_d_i * ( w.x[ i+1 ][ j ][ k ] - 2. * w.x[ i ][ j ][ k ] + w.x[ i-1 ][ j ][ k ] ) / dr2 * rm_2 - 2. / rm_1 * dwdr;
-	d2tdr2 = h_d_i * ( t.x[ i+1 ][ j ][ k ] - 2. * t.x[ i ][ j ][ k ] + t.x[ i-1 ][ j ][ k ] ) / dr2 * rm_2 - 2. / rm_1 * dtdr;
-	d2cdr2 = h_d_i * ( c.x[ i+1 ][ j ][ k ] - 2. * c.x[ i ][ j ][ k ] + c.x[ i-1 ][ j ][ k ] ) / dr2 * rm_2 - 2. / rm_1 * dcdr;
-*/
-	d2udthe2 = h_d_j * ( u.x[ i ][ j+1 ][ k ] - 2. * u.x[ i ][ j ][ k ] + u.x[ i ][ j-1 ][ k ] ) / dthe2;
-	d2vdthe2 = h_d_j * ( v.x[ i ][ j+1 ][ k ] - 2. * v.x[ i ][ j ][ k ] + v.x[ i ][ j-1 ][ k ] ) / dthe2;
-	d2wdthe2 = h_d_j * ( w.x[ i ][ j+1 ][ k ] - 2. * w.x[ i ][ j ][ k ] + w.x[ i ][ j-1 ][ k ] ) / dthe2;
-	d2tdthe2 = h_d_j * ( t.x[ i ][ j+1 ][ k ] - 2. * t.x[ i ][ j ][ k ] + t.x[ i ][ j-1 ][ k ] ) / dthe2;
-	d2cdthe2 = h_d_j * ( c.x[ i ][ j+1 ][ k ] - 2. * c.x[ i ][ j ][ k ] + c.x[ i ][ j-1 ][ k ] ) / dthe2;
-
-	d2udphi2 = h_d_k * ( u.x[ i ][ j ][ k+1 ] - 2. * u.x[ i ][ j ][ k ] + u.x[ i ][ j ][ k-1 ] ) / dphi2;
-	d2vdphi2 = h_d_k * ( v.x[ i ][ j ][ k+1 ] - 2. * v.x[ i ][ j ][ k ] + v.x[ i ][ j ][ k-1 ] ) / dphi2;
-	d2wdphi2 = h_d_k * ( w.x[ i ][ j ][ k+1 ] - 2. * w.x[ i ][ j ][ k ] + w.x[ i ][ j ][ k-1 ] ) / dphi2;
-	d2tdphi2 = h_d_k * ( t.x[ i ][ j ][ k+1 ] - 2. * t.x[ i ][ j ][ k ] + t.x[ i ][ j ][ k-1 ] ) / dphi2;
-	d2cdphi2 = h_d_k * ( c.x[ i ][ j ][ k+1 ] - 2. * c.x[ i ][ j ][ k ] + c.x[ i ][ j ][ k-1 ] ) / dphi2;
-
-
-// coriolis and centrifugal forces are due to the very small rotation number of the earth extremely small
-// their effect will be imagined after a huge number of iterations
-
-
-	RS_Coriolis_Energy = ( + u.x[ i ][ j ][ k ] * coriolis * 2. * omega * sinthe * w.x[ i ][ j ][ k ]
-							- w.x[ i ][ j ][ k ] * coriolis * ( 2. * omega * sinthe * u.x[ i ][ j ][ k ] + 2. * omega * costhe * v.x[ i ][ j ][ k ] )
-							+ v.x[ i ][ j ][ k ] * coriolis * 2. * omega * costhe * w.x[ i ][ j ][ k ] ) * ec * pr;
-
-	RS_Centrifugal_Energy = + centrifugal * rad.z[ i ] * pow ( ( omega * sinthe ), 2 ) * ec * pr
-							 + centrifugal * rad.z[ i ] * sinthe * costhe * pow ( ( omega ), 2 ) * ec * pr;
-
-	RS_Coriolis_Momentum_rad = +  h_d_i * coriolis * 2. * omega * sinthe * w.x[ i ][ j ][ k ];
-	RS_Coriolis_Momentum_the = +  h_d_j * coriolis * 2. * omega * costhe * w.x[ i ][ j ][ k ];
-	RS_Coriolis_Momentum_phi = -  h_d_k * coriolis * ( 2. * omega * sinthe * u.x[ i ][ j ][ k ] + 2. * omega * costhe * v.x[ i ][ j ][ k ] );
-
-	RS_Centrifugal_Momentum_rad = + centrifugal * rad.z[ i ] * pow ( ( omega * sinthe ), 2 );
-	RS_Centrifugal_Momentum_the = + centrifugal * rad.z[ i ] * sinthe * costhe * pow ( ( omega ), 2 );
-
-/*
-	if ( t.x[ i ][ j ][ k ] < ta ) 
-	{
-		tn.x[ i ][ j ][ k ] = ta;
-		cn.x[ i ][ j ][ k ] = ca;
-		c_Boussinesq = ( ( ( ta * t_0 - t_0 ) + 346. ) / 10. ) / c_0;
-	}
-	else
-	{
-		c_Boussinesq = ( ( ( tn.x[ i ][ j ][ k ] * t_0 - t_0 ) + 346. ) / 10. ) / c_0;
-	}
-*/
-//		c_Boussinesq = .9682;															// for c = 0.9682 compares to a salinity of 33.5 psu
-//		c_Boussinesq = .7225;															// for c = 0.7225 compares to a salinity of 25.0 psu taken from Burchard
-//		c_Boussinesq = 1.01156;														// for c = 1.01156 compares to a salinity of 35.0 psu, ca corresponds to ta = 1.01464  ( = 4°C )
-		c_Boussinesq = 1.0571;															// for c = 1.0571 compares to a salinity of 36.58 psu
-
-//		c_Boussinesq = r_0_water;														// compares to 1025 kg/m³ of salt water, for c = 0.7225 compares to a salinity of 25.0 psu, taken from Burchard
-
-
-	RS_buoyancy_Momentum = - L_hyd / ( u_0 * u_0 ) * buoyancy * g * ( ( c.x[ i ][ j ][ k ] * c_0 + r_0_water ) - ( c_Boussinesq * c_0 + r_0_water ) ) / ( c_Boussinesq * c_0 + r_0_water );																								// bouyancy based on salt water density 
-//	RS_buoyancy_Momentum = - L_hyd / ( u_0 * u_0 ) * buoyancy * g * ( ( c.x[ i ][ j ][ k ] * c_0 + 1000. ) - c_Boussinesq ) / c_Boussinesq;																								// bouyancy based on salt water density 
-//	RS_buoyancy_Momentum = 0.;
-	RS_buoyancy_Energy = u_0 * ec * u.x[ i ][ j ][ k ] * RS_buoyancy_Momentum;		// bouyancy based on salt water density
-	BuoyancyForce_3D.x[ i ][ j ][ k ] = RS_buoyancy_Momentum;
- 	Salt_Balance.x[ i ][ j ][ k ] = RS_Salt_Balance = ( c.x[ i ][ j ][ k ] - c_Boussinesq ) * c_0; 
-
-//	cout << i << "   " << j << "   " << k << "   " << RS_Salt_Balance << "   " << c.x[ i ][ j ][ k ] << "   " << c_Boussinesq << "   " << RS_buoyancy_Momentum << "   " << g << "   " << buoyancy << endl;
-
-	if ( Salt_Balance.x[ i ][ j ][ k ] >= 0. )
-	{
-		Salt_Finger.x[ i ][ j ][ k ] = Salt_Balance.x[ i ][ j ][ k ];
-	}
-	else
-	{
-		Salt_Finger.x[ i ][ j ][ k ] = 0.;
-	}
-
-	if ( Salt_Balance.x[ i ][ j ][ k ] < 0. )
-	{
-		Salt_Diffusion.x[ i ][ j ][ k ] = Salt_Balance.x[ i ][ j ][ k ];
-	}
-	else
-	{
-		Salt_Diffusion.x[ i ][ j ][ k ] = 0.;
-	}
-
-
-	if ( h.x[ i ][ j ][ k ] == 1. )
-	{
-		Salt_Balance.x[ i ][ j ][ k ] = 0.;
-		Salt_Finger.x[ i ][ j ][ k ] = 0.;
-		BuoyancyForce_3D.x[ i ][ j ][ k ] = 0.;
-
-		RS_Salt_Energy = 0.;
-
-		RS_Coriolis_Energy = 0.;
-		RS_Coriolis_Momentum_rad = 0.;
-		RS_Coriolis_Momentum_the = 0.;
-		RS_Coriolis_Momentum_phi = 0.;
-
-		RS_Centrifugal_Energy = 0.;
-		RS_Centrifugal_Momentum_rad = 0.;
-		RS_Centrifugal_Momentum_the = 0.;
-	}
-
-
-
-/*
-			cout << endl;
-			cout << " i = " << i << "   j = " << j << "   k = " << k << endl;
-			cout << " RS_Coriolis_Momentum_rad = " << RS_Coriolis_Momentum_rad * 1000. << "     RS_Coriolis_Momentum_the = " << RS_Coriolis_Momentum_the * 1000. << "     RS_Coriolis_Momentum_phi = " << RS_Coriolis_Momentum_phi * 1000. << endl << endl;
-			cout << " RS_Centrifugal_Momentum_rad = " << RS_Centrifugal_Momentum_rad * 1000. << "     RS_Centrifugal_Momentum_the = " << RS_Centrifugal_Momentum_the * 1000. << endl;
-			cout << " RS_Coriolis_Energy = " << RS_Coriolis_Energy * 1000. << "     RS_Centrifugal_Energy = " << RS_Centrifugal_Energy * 1000. << endl;
-			cout << endl;
-*/
-
-
-// Right Hand Side of the time derivative ot temperature, pressure, salt concentration and velocity components
-
-//  3D volume iterations
-
-	rhs_t.x[ i ][ j ][ k ] = - ( u.x[ i ][ j ][ k ] * dtdr + v.x[ i ][ j ][ k ] * dtdthe / rm + w.x[ i ][ j ][ k ] * dtdphi / rmsinthe )
-			- .5 * ec * ( u.x[ i ][ j ][ k ] * dpdr + v.x[ i ][ j ][ k ] / rm * dpdthe + w.x[ i ][ j ][ k ] / rmsinthe * dpdphi )
-			+ ( d2tdr2 + dtdr * 2. / rm + d2tdthe2 / rm2 + dtdthe * costhe / rm2sinthe + d2tdphi2 / rm2sinthe2 ) / ( re * pr )
-			+ 2. * ec / re * ( ( dudr * dudr) + pow ( ( dvdthe / rm + h_d_i * u.x[ i ][ j ][ k ] / rm ), 2. )
-			+ pow ( ( dwdphi / rmsinthe + h_d_i * u.x[ i ][ j ][ k ] / rm + h_d_j * v.x[ i ][ j ][ k ] * cotthe / rm ), 2. ) )
-			+ ec / re * ( pow ( ( dvdr - h_d_j * v.x[ i ][ j ][ k ] / rm + dudthe / rm ), 2. ) + pow ( ( dudphi / rmsinthe + dwdr - h_d_k * w.x[ i ][ j ][ k ] / rm ), 2. )
-			+ pow ( ( dwdthe * sinthe / rm2 - h_d_k * w.x[ i ][ j ][ k ] * costhe / rmsinthe + dvdphi / rmsinthe ), 2. ) )
-			+ RS_buoyancy_Energy
-			+ RS_Coriolis_Energy + RS_Centrifugal_Energy;
-//			- h_c_i * t.x[ i ][ j ][ k ] * k_Force / dthe2;					// immersed boundary condition as a negative force addition
-
-
-	rhs_u.x[ i ][ j ][ k ] = - ( u.x[ i ][ j ][ k ] * dudr + v.x[ i ][ j ][ k ] * dudthe / rm + w.x[ i ][ j ][ k ] * dudphi / rmsinthe )
-			- .5 * dpdr + ( d2udr2 + h_d_i * 2. * u.x[ i ][ j ][ k ] / rm2 + d2udthe2 / rm2 + 4. * dudr / rm + dudthe * costhe / rm2sinthe + d2udphi2 / rm2sinthe2 ) / re
-			+ RS_buoyancy_Momentum
-			+ RS_Coriolis_Momentum_rad + RS_Centrifugal_Momentum_rad
-			- h_c_i * u.x[ i ][ j ][ k ] * k_Force / dthe2;					// immersed boundary condition as a negative force addition
-
-
-	rhs_v.x[ i ][ j ][ k ] = - ( u.x[ i ][ j ][ k ] * dvdr + v.x[ i ][ j ][ k ] * dvdthe / rm + w.x[ i ][ j ][ k ] * dvdphi / rmsinthe )
-			- .5 * dpdthe / rm + ( d2vdr2 + dvdr * 2. / rm + d2vdthe2 / rm2 + dvdthe / rm2sinthe * costhe
-			- ( 1. + costhe * costhe / sinthe2 ) * h_d_j * v.x[ i ][ j ][ k ] / rm + d2vdphi2 / rm2sinthe2
-			+ 2. * dudthe / rm2 - dwdphi * 2. * costhe / rm2sinthe2 ) / re
-			+ RS_Coriolis_Momentum_the + RS_Centrifugal_Momentum_the
-			- h_c_j * v.x[ i ][ j ][ k ] * k_Force / dthe2;					// immersed boundary condition as a negative force addition
-
-
-	rhs_w.x[ i ][ j ][ k ] = - ( u.x[ i ][ j ][ k ] * dwdr + v.x[ i ][ j ][ k ] * dwdthe / rm + w.x[ i ][ j ][ k ] * dwdphi / rmsinthe )
-			- .5 * dpdphi / rmsinthe + ( d2wdr2 + dwdr * 2. / rm + d2wdthe2 / rm2 + dwdthe / rm2sinthe  * costhe
-			- ( 1. + costhe * costhe / sinthe2 ) * h_d_k * w.x[ i ][ j ][ k ] / rm + d2wdphi2 / rm2sinthe2
-			+ 2. * dudphi / rm2sinthe + dvdphi * 2. * costhe / rm2sinthe2 ) / re
-			+ RS_Coriolis_Momentum_phi
-			- h_c_k * w.x[ i ][ j ][ k ] * k_Force / dphi2;					// immersed boundary condition as a negative force addition
-
-
-	rhs_c.x[ i ][ j ][ k ] = - ( u.x[ i ][ j ][ k ] * dcdr + v.x[ i ][ j ][ k ] * dcdthe / rm + w.x[ i ][ j ][ k ] * dcdphi / rmsinthe )
-			+ ( d2cdr2 + dcdr * 2. / rm + d2cdthe2 / rm2 + dcdthe * costhe / rm2sinthe + d2cdphi2 / rm2sinthe2 ) / ( sc * re );
-//			- h_c_i * c.x[ i ][ j ][ k ] * k_Force / dthe2;					// immersed boundary condition as a negative force addition
-
-
-	// for the Poisson equation to solve for the pressure, pressure gradient sbstracted from the RHS
-
-	aux_u.x[ i ][ j ][ k ] = rhs_u.x[ i ][ j ][ k ] + dpdr;
-	aux_v.x[ i ][ j ][ k ] = rhs_v.x[ i ][ j ][ k ] + dpdthe / rm;
-	aux_w.x[ i ][ j ][ k ] = rhs_w.x[ i ][ j ][ k ] + dpdphi / rmsinthe;
-
+void cHydrosphereModel::RK_RHS_2D_Hydrosphere(int j, int k){
+//    double cc = - 1.;  // factor leads to better results(adapted method)
+    double cc = - 2.;  // factor leads to better results 
+//  (Reinout vander Meulen, The immersed Boundary Method for the Incompressible Navier-Stokes Equations)
+    double coeff_p = 1.;
+    double dthe2 = dthe * dthe;
+    double dphi2 = dphi * dphi;
+    double rm = rad.z[im-1];
+    double rm2 = rm * rm;
+    double sinthe = sin(the.z[j]);
+    double sinthe2 = sinthe * sinthe;
+    double costhe = cos(the.z[j]);
+    double rmsinthe = rm * sinthe;
+    double rm2sinthe = rm2 * sinthe;
+    double rm2sinthe2 = rm2 * sinthe2;
+    double dist = 0;
+    double h_0_j = 0, h_d_j = 0;
+    double h_0_k = 0, h_d_k = 0;
+    if(is_water(h, im-1, j, k)){
+        h_0_j = h_0_k = 0.;
+        h_d_j = h_d_k = 1.; 
+    }
+    if(is_land(h, im-1, j, k)){
+        h_0_j = h_0_k = 1.;
+        h_d_j = h_d_k = 0.; 
+    }
+    double dist_coeff = .5;
+    if((is_water(h, im-1, j, k))&&(is_land(h, im-1, j+1, k))){ 
+        dist = dist_coeff * dthe;
+        h_0_j = dist/dthe;
+        h_d_j = 1. - h_0_j; 
+    }
+    if((is_water(h, im-1, j, k))&&(is_land(h, im-1, j-1, k))){
+        dist = dist_coeff * dthe;
+        h_0_j = dist/dthe;
+        h_d_j = 1. - h_0_j; 
+    }
+    if((is_water(h, im-1, j, k))&&(is_land(h, im-1, j, k+1))){
+        dist = dist_coeff * dphi;
+        h_0_k = dist/dphi;
+        h_d_k = 1. - h_0_k; 
+    }
+    if((is_water(h, im-1, j, k))&&(is_land(h, im-1, j, k-1))){
+        dist = dist_coeff * dphi;
+        h_0_k = dist/dphi;
+        h_d_k = 1. - h_0_k; 
+    }
+    double dvdthe = h_d_j * (v.x[im-1][j+1][k] - v.x[im-1][j-1][k])
+        /(2. * dthe);
+    double dwdthe = h_d_j * (w.x[im-1][j+1][k] - w.x[im-1][j-1][k])
+        /(2. * dthe);
+    double dpdthe = h_d_j * (p_dyn.x[im-1][j+1][k] - p_dyn.x[im-1][j-1][k])
+        /(2. * dthe);
+    double dvdphi = h_d_k * (v.x[im-1][j][k+1] - v.x[im-1][j][k-1])/(2. * dphi);
+    double dwdphi = h_d_k * (w.x[im-1][j][k+1] - w.x[im-1][j][k-1])/(2. * dphi);
+    double dpdphi = h_d_k * (p_dyn.x[im-1][j][k+1] - p_dyn.x[im-1][j][k-1])
+        /(2. * dphi);
+    double d2vdthe2 = h_d_j * (v.x[im-1][j+1][k] - 2. * v.x[im-1][j][k] 
+        + v.x[im-1][j-1][k])/dthe2;
+    double d2wdthe2 = h_d_j * (w.x[im-1][j+1][k] - 2. * w.x[im-1][j][k] 
+        + w.x[im-1][j-1][k])/dthe2;
+    double d2vdphi2 = h_d_k * (v.x[im-1][j][k+1] - 2. * v.x[im-1][j][k] 
+        + v.x[im-1][j][k-1])/dphi2;
+    double d2wdphi2 = h_d_k * (w.x[im-1][j][k+1] - 2. * w.x[im-1][j][k] 
+        + w.x[im-1][j][k-1])/dphi2;
+    if((j >= 2)&&(j < jm-3)){
+        if((is_land(h, im-1, j, k)) 
+                &&((is_land(h, im-1, j+1, k)) 
+                &&(is_land(h, im-1, j+2, k)))){
+            dvdthe = h_d_j * (- 3. * v.x[im-1][j][k] + 4. * v.x[im-1][j+1][k] 
+                - v.x[im-1][j+2][k])/(2. * dthe);
+            dwdthe = h_d_j * (- 3. * w.x[im-1][j][k] + 4. * w.x[im-1][j+1][k] 
+                - w.x[im-1][j+2][k])/(2. * dthe);
+            dpdthe = h_d_j * (- 3. * p_dyn.x[im-1][j][k] 
+                + 4. * p_dyn.x[im-1][j+1][k] - p_dyn.x[im-1][j+2][k])
+                /(2. * dthe);
+            d2vdthe2 = h_d_j * (2. * v.x[im-1][j][k] - 2. * v.x[im-1][j+1][k] 
+                + v.x[im-1][j+2][k])/dthe2;
+            d2wdthe2 = h_d_j * (2. * w.x[im-1][j][k] - 2. * w.x[im-1][j+1][k] 
+                + w.x[im-1][j+2][k])/dthe2;
+        }
+        if((is_land(h, im-1, j, k)) 
+                &&(is_land(h, im-1, j+1, k))){
+            dvdthe = h_d_j * (v.x[im-1][j+1][k] - v.x[im-1][j][k])/dthe;
+            dwdthe = h_d_j * (w.x[im-1][j+1][k] - w.x[im-1][j][k])/dthe;
+            dpdthe = h_d_j * (p_dyn.x[im-1][j+1][k] - p_dyn.x[im-1][j][k])/dthe;
+            d2vdthe2 = d2wdthe2 = 0.;
+        }
+        if((is_land(h, im-1, j, k)) 
+            &&(is_land(h, im-1, j-1, k)) 
+            &&(is_land(h, im-1, j-2, k))){
+            dvdthe = h_d_j * (- 3. * v.x[im-1][j][k] + 4. * v.x[im-1][j-1][k] 
+                - v.x[im-1][j-2][k])/(2. * dthe);
+            dwdthe = h_d_j * (- 3. * w.x[im-1][j][k] + 4. * w.x[im-1][j-1][k] 
+                - w.x[im-1][j-2][k])/(2. * dthe);
+            dpdthe = h_d_j * (- 3. * p_dyn.x[im-1][j][k] 
+                + 4. * p_dyn.x[im-1][j-1][k] - p_dyn.x[im-1][j-2][k])
+                /(2. * dthe);
+            d2vdthe2 = h_d_j * (2. * v.x[im-1][j][k] - 2. * v.x[im-1][j-1][k] 
+                + v.x[im-1][j-2][k])/dthe2;
+            d2wdthe2 = h_d_j * (2. * w.x[im-1][j][k] - 2. * w.x[im-1][j-1][k] 
+                + w.x[im-1][j-2][k])/dthe2;
+        }
+        if((is_land(h, im-1, j, k)) 
+            &&(is_land(h, im-1, j-1, k))){
+            dvdthe = h_d_j * (v.x[im-1][j][k] - v.x[im-1][j-1][k])/dthe;
+            dwdthe = h_d_j * (w.x[im-1][j][k] - w.x[im-1][j-1][k])/dthe;
+            dpdthe = h_d_j * (p_dyn.x[im-1][j][k] - p_dyn.x[im-1][j-1][k])/dthe;
+            d2vdthe2 = d2wdthe2 = 0.;
+        }
+        d2vdthe2 = d2wdthe2 = 0.;
+    }
+    if((k >= 2) &&(k < km-3)){
+        if((is_land(h, im-1, j, k)) 
+            &&(is_land(h, im-1, j, k+1)) 
+            &&(is_land(h, im-1, j, k+2))){
+            dvdphi = h_d_k *(- 3. * v.x[im-1][j][k] + 4. * v.x[im-1][j][k+1] 
+                - v.x[im-1][j][k+2])/(2. * dphi);
+            dwdphi = h_d_k *(- 3. * w.x[im-1][j][k] + 4. * w.x[im-1][j][k+1] 
+                - w.x[im-1][j][k+2])/(2. * dphi);
+            dpdphi = h_d_k *(- 3. * p_dyn.x[im-1][j][k] 
+                + 4. * p_dyn.x[im-1][j][k+1] - p_dyn.x[im-1][j][k+2])
+                /(2. * dphi);
+            d2vdthe2 = h_d_k *(2. * v.x[im-1][j][k] - 2. * v.x[im-1][j][k+1] 
+                + v.x[im-1][j][k+2])/dphi2;
+            d2wdthe2 = h_d_k *(2. * w.x[im-1][j][k] - 2. * w.x[im-1][j][k+1] 
+                + w.x[im-1][j][k+2])/dphi2;
+        }
+        if((is_land(h, im-1, j, k)) 
+            &&(is_land(h, im-1, j, k+1))){
+            dvdphi = h_d_k * (v.x[im-1][j][k+1] - v.x[im-1][j][k])/dphi;
+            dwdphi = h_d_k * (w.x[im-1][j][k+1] - w.x[im-1][j][k])/dphi;
+            dpdphi = h_d_k * (p_dyn.x[im-1][j][k+1] - p_dyn.x[im-1][j][k])/dphi;
+            d2vdphi2 = d2wdphi2 = 0.;
+        }
+        if((is_land(h, im-1, j, k)) 
+            &&(is_land(h, im-1, j, k-1)) 
+            &&(is_land(h, im-1, j, k-2))){
+            dvdphi = h_d_k * (- 3. * v.x[im-1][j][k] + 4. * v.x[im-1][j][k-1] 
+                - v.x[im-1][j][k-2])/(2. * dphi);
+            dwdphi = h_d_k * (- 3. * w.x[im-1][j][k] + 4. * w.x[im-1][j][k-1] 
+                - w.x[im-1][j][k-2])/(2. * dphi);
+            dpdphi = h_d_k * (- 3. * p_dyn.x[im-1][j][k] 
+                + 4. * p_dyn.x[im-1][j][k-1] - p_dyn.x[im-1][j][k-2])
+                /(2. * dphi);
+            d2vdthe2 = h_d_k * (2. * v.x[im-1][j][k] - 2. * v.x[im-1][j][k-1] 
+                + v.x[im-1][j][k-2])/dphi2;
+            d2wdthe2 = h_d_k * (2. * w.x[im-1][j][k] - 2. * w.x[im-1][j][k-1] 
+                + w.x[im-1][j][k-2])/dphi2;
+        }
+        if((is_land(h, im-1, j, k)) 
+            &&(is_land(h, im-1, j, k-1))){
+            dvdphi = h_d_k * (v.x[im-1][j][k] - v.x[im-1][j][k-1])/dphi;
+            dwdphi = h_d_k * (w.x[im-1][j][k] - w.x[im-1][j][k-1])/dphi;
+            dpdphi = h_d_k * (p_dyn.x[im-1][j][k] - p_dyn.x[im-1][j][k-1])/dphi;
+            d2vdphi2 = d2wdphi2 = 0.;
+        }
+        d2vdphi2 = d2wdphi2 = 0.;
+    }else{
+        if((is_land(h, im-1, j, k)) &&(is_land(h, im-1, j, k+1))){
+            dvdphi = h_d_k * (v.x[im-1][j][k+1] - v.x[im-1][j][k])/dphi;
+            dwdphi = h_d_k * (w.x[im-1][j][k+1] - w.x[im-1][j][k])/dphi;
+            dpdphi = h_d_k * (p_dyn.x[im-1][j][k+1] - p_dyn.x[im-1][j][k])/dphi;
+        }
+        if((h.x[im-1][j][k] == 0.) &&(is_land(h, im-1, j, k-1))){
+            dvdphi = h_d_k * (v.x[im-1][j][k] - v.x[im-1][j][k-1])/dphi;
+            dwdphi = h_d_k * (w.x[im-1][j][k] - w.x[im-1][j][k-1])/dphi;
+            dpdphi = h_d_k * (p_dyn.x[im-1][j][k] - p_dyn.x[im-1][j][k-1])/dphi;
+        }
+        d2vdthe2 = d2wdthe2 = 0.;
+        d2vdphi2 = d2wdphi2 = 0.;
+    }
+    rhs_v.x[im-1][j][k] = -(v.x[im-1][j][k] * dvdthe/rm 
+        + w.x[im-1][j][k] * dvdphi/rmsinthe) 
+        - coeff_p * dpdthe/rm 
+        - (d2vdthe2/rm2 + dvdthe/rm2sinthe * costhe 
+        - (1. + costhe * costhe/sinthe2) * h_d_j * v.x[im-1][j][k] 
+        + d2vdphi2/rm2sinthe2 - dwdphi * 2. * costhe/rm2sinthe2)/re 
+        + cc * h_0_j * v.x[im-1][j][k]/dthe2;
+    rhs_w.x[im-1][j][k] = -(v.x[im-1][j][k] * dwdthe/rm 
+        + w.x[im-1][j][k] * dwdphi/rmsinthe) 
+        - coeff_p * dpdphi/rmsinthe 
+        + (d2wdthe2/rm2 + dwdthe/rm2sinthe  * costhe 
+        - (1. + costhe * costhe/sinthe2) * h_d_k * w.x[im-1][j][k] 
+        + d2wdphi2/rm2sinthe2 + dvdphi * 2. * costhe/rm2sinthe2)/re 
+        + cc * h_0_k * w.x[im-1][j][k]/dphi2;
+    aux_v.x[im-1][j][k] = rhs_v.x[im-1][j][k] + coeff_p * dpdthe/rm;
+    aux_w.x[im-1][j][k] = rhs_w.x[im-1][j][k] + coeff_p * dpdphi/rmsinthe;
+    if(is_land(h, im-1, j, k)){
+        aux_u.x[im-1][j][k] = aux_v.x[im-1][j][k] = aux_w.x[im-1][j][k] = 0.;
+    }
 }
-
-
-
-
-void RHS_Hydrosphere::RK_RHS_2D_Hydrosphere ( int j, int k, Array_1D &rad, Array_1D &the, Array_1D &phi, Array &h, Array &v, Array &w, Array &p_dyn, Array &vn, Array &wn, Array &rhs_v, Array &rhs_w, Array &aux_v, Array &aux_w )
-{
-//  2D surface iterations
-
-//	k_Force = 1.;																			// factor for accelleration of convergence processes inside the immersed boundary conditions
-	k_Force = 10.;																			// factor for accelleration of convergence processes inside the immersed boundary conditions
-
-	cc = + 1.;
-
-	h_check_i = h_check_j = h_check_k = 0;
-
-// collection of coefficients
-	dr2 = dr * dr;
-	dthe2 = dthe * dthe;
-	dphi2 = dphi * dphi;
-
-	rm = rad.z[ im-1 ] / r0;
-	rm2 = rm * rm;
-
-// collection of coefficients
-	sinthe = sin( the.z[ j ] );
-	sinthe2 = sinthe * sinthe;
-	costhe = cos( the.z[ j ] );
-	rmsinthe = rm * sinthe;
-	rm2sinthe = rm2 * sinthe;
-	rm2sinthe2 = rm2 * sinthe2;
-
-
-/*
-// in case needed for the influence of the radial derivatives 
-//  3D volume iterations in case 1. and 2. order derivatives at walls are needed >>>>>>>>>>>>>>>>>>>>>>>>
-// only in positive r-direction above ground 
-
-	if ( ( h.x[ im - 1 ][ j ][ k ] == 1. ) && ( h.x[ im - 2 ][ j ][ k ] == 0. ) )
-	{
-		h_0_i = ( double ) ( i ) * dr - dr / 4.;
-
-		if ( fabs ( ( ( double ) ( i + 1 ) * dr - h_0_i ) ) < dr )
-		{
-			h_c_i = cc * ( 1. - fabs ( ( ( double ) ( i + 1 ) * dr - h_0_i ) ) / dr ); 
-//			h_c_i = cc * ( .5 * ( acos ( fabs ( ( double ) ( i + 1 ) * dr - h_0_i ) * 3.14 / dr ) + 1. ) ); 
-			h_d_i = 1. - h_c_i;
-			h_check_i = 1;
-		}
-	}
-*/
-
-
-
-// 2D adapted immersed boundary method >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-// only in positive the-direction along northerly boundaries 
-
-	if ( ( h.x[ im - 1 ][ j - 1 ][ k ] == 1. ) && ( h.x[ im - 1 ][ j ][ k ] == 0. ) )
-	{
-		h_0_j = ( double ) ( j ) * dthe + dthe / 4.;
-
-		if ( fabs ( ( ( double ) ( j + 1 ) * dthe - h_0_j ) ) < dthe )
-		{
-			h_c_j = cc * ( 1. - fabs ( ( ( double ) ( j + 1 ) * dthe - h_0_j ) ) / dthe ); 
-//			h_c_j = cc * ( .5 * ( acos ( fabs ( ( double ) ( j + 1 ) * dthe - h_0_j ) * 3.14 / dthe ) + 1. ) ); 
-			h_d_j = 1. - h_c_j;
-			h_check_j = 1;
-		}
-	}
-
-
-
-// 2D adapted immersed boundary method >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-// only in negative the-direction along southerly boundaries 
-
-	if ( ( h.x[ im - 1 ][ j + 1 ][ k ] == 1. ) && ( h.x[ im - 1 ][ j ][ k ] == 0. ) )
-	{
-		h_0_j = ( double ) ( j ) * dthe - dthe / 4.;
-
-		if ( fabs ( ( ( double ) ( j - 1 ) * dthe - h_0_j ) ) < dthe )
-		{
-			h_c_j = cc * ( 1. - fabs ( ( ( double ) ( j - 1 ) * dthe - h_0_j ) ) / dthe ); 
-//			h_c_j = cc * ( .5 * ( acos ( fabs ( ( double ) ( j - 1 ) * dthe - h_0_j ) * 3.14 / dthe ) + 1. ) ); 
-			h_d_j = 1. - h_c_j;
-			h_check_j = 1;
-		}
-	}
-
-
-// 2D adapted immersed boundary method >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-// only in positive phi-direction on westerly boundaries 
-
-	if ( ( h.x[ im - 1 ][ j ][ k - 1 ] == 1. ) && ( h.x[ im - 1 ][ j ][ k ] == 0. ) )
-	{
-		h_0_k = ( double ) ( k ) * dphi + dphi / 4.;
-
-		if ( fabs ( ( ( double ) ( k + 1 ) * dphi - h_0_k ) ) < dphi )
-		{
-			h_c_k = cc * ( 1. - fabs ( ( ( double ) ( k + 1 ) * dphi - h_0_k ) ) / dphi ); 
-//			h_c_k = cc * ( .5 * ( acos ( fabs ( ( double ) ( k + 1 ) * dphi - h_0_k ) * 3.14 / dphi ) + 1. ) ); 
-			h_d_k = 1. - h_c_k;
-			h_check_k = 1;
-		}
-	}
-
-
-
-// 2D adapted immersed boundary method >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-// only in negative phi-direction along easterly boundaries 
-
-	if ( ( h.x[ im - 1 ][ j ][ k + 1 ] == 1. ) && ( h.x[ im - 1 ][ j ][ k ] == 0. ) )
-	{
-		h_0_k = ( double ) ( k ) * dphi - dphi / 4.;
-
-		if ( fabs ( ( ( double ) ( k - 1 ) * dphi - h_0_k ) ) < dphi )
-		{
-			h_c_k = cc * ( 1. - fabs ( ( ( double ) ( k - 1 ) * dphi - h_0_k ) ) / dphi ); 
-//			h_c_k = cc * ( .5 * ( acos ( fabs ( ( double ) ( k - 1 ) * dphi - h_0_k ) * 3.14 / dphi ) + 1. ) ); 
-			h_d_k = 1. - h_c_k;
-			h_check_k = 1;
-		}
-	}
-
-
-		if ( ( h.x[ im - 1 ][ j ][ k ] == 0. ) && ( h_check_j != 1 ) )
-		{
-			h_c_j = 0.; 
-			h_d_j = 1. - h_c_j;
-		}
-
-		if ( ( h.x[ im - 1 ][ j ][ k ] == 1. ) && ( h_check_j != 1 ) )
-		{
-			h_c_j = 1.; 
-			h_d_j = 1. - h_c_j;
-		}
-
-
-		if ( ( h.x[ im - 1 ][ j ][ k ] == 0. ) && ( h_check_k != 1 ) )
-		{
-			h_c_k = 0.; 
-			h_d_k = 1. - h_c_k;
-		}
-
-		if ( ( h.x[ im - 1 ][ j ][ k ] == 1. ) && ( h_check_k != 1 ) )
-		{
-			h_c_k = 1.; 
-			h_d_k = 1. - h_c_k;
-		}
-
-
-		dvdthe = h_d_j * ( v.x[ im-1 ][ j+1 ][ k ] - v.x[ im-1 ][ j-1 ][ k ] ) / ( 2. * dthe );
-		dwdthe = h_d_j * ( w.x[ im-1 ][ j+1 ][ k ] - w.x[ im-1 ][ j-1 ][ k ] ) / ( 2. * dthe );
-		dpdthe = h_d_j * ( p_dyn.x[ im-1 ][ j+1 ][ k ] - p_dyn.x[ im-1 ][ j-1 ][ k ] ) / ( 2. * dthe );
-
-		dvdphi = h_d_k * ( v.x[ im-1 ][ j ][ k+1 ] - v.x[ im-1 ][ j ][ k-1 ] ) / ( 2. * dphi );
-		dwdphi = h_d_k * ( w.x[ im-1 ][ j ][ k+1 ] - w.x[ im-1 ][ j ][ k-1 ] ) / ( 2. * dphi );
-		dpdphi = h_d_k * ( p_dyn.x[ im-1 ][ j ][ k+1 ] - p_dyn.x[ im-1 ][ j ][ k-1 ] ) / ( 2. * dphi );
-
-		d2vdthe2 = h_d_j * ( v.x[ im-1 ][ j+1 ][ k ] - 2. * v.x[ im-1 ][ j ][ k ] + v.x[ im-1 ][ j-1 ][ k ] ) / dthe2;
-		d2wdthe2 = h_d_j * ( w.x[ im-1 ][ j+1 ][ k ] - 2. * w.x[ im-1 ][ j ][ k ] + w.x[ im-1 ][ j-1 ][ k ] ) / dthe2;
-
-		d2vdphi2 = h_d_k * ( v.x[ im-1 ][ j ][ k+1 ] - 2. * v.x[ im-1 ][ j ][ k ] + v.x[ im-1 ][ j ][ k-1 ] ) / dphi2;
-		d2wdphi2 = h_d_k * ( w.x[ im-1 ][ j ][ k+1 ] - 2. * w.x[ im-1 ][ j ][ k ] + w.x[ im-1 ][ j ][ k-1 ] ) / dphi2;
-
-		RS_Coriolis_Momentum_the = + coriolis * 2. * omega * costhe * w.x[ im-1 ][ j ][ k ] * h_d_j;
-		RS_Centrifugal_Momentum_the = + centrifugal * rad.z[ im-1 ] * sinthe * costhe * pow ( ( omega ), 2 );
-		RS_Coriolis_Momentum_phi = - coriolis * omega * costhe * v.x[ im-1 ][ j ][ k ] * h_d_k;
-
-		rhs_v.x[ im-1 ][ j ][ k ] = - ( v.x[ im-1 ][ j ][ k ] * dvdthe / rm + w.x[ im-1 ][ j ][ k ] * dvdphi / rmsinthe ) +
-				- .5 * dpdthe / rm + ( d2vdr2 + 2. * dvdr / rm + d2vdthe2 / rm2 + dvdthe / rm2sinthe * costhe
-				- ( 1. + costhe * costhe / sinthe2 ) * h_d_j * v.x[ im-1 ][ j ][ k ] / rm + d2vdphi2 / rm2sinthe2 - dwdphi * 2. * costhe / rm2sinthe2 ) / re
-				+ RS_Coriolis_Momentum_the + RS_Centrifugal_Momentum_the
-				- h_c_j * v.x[ im - 1 ][ j ][ k ] * k_Force / dthe2;					// immersed boundary condition as a negative force addition
-
-		rhs_w.x[ im-1 ][ j ][ k ] = - ( v.x[ im-1 ][ j ][ k ] * dwdthe / rm + w.x[ im-1 ][ j ][ k ] * dwdphi / rmsinthe ) +
-				- .5 * dpdphi / rmsinthe + ( d2wdthe2 / rm2 + dwdthe / rm2sinthe  * costhe
-				- ( 1. + costhe * costhe / sinthe2 ) * h_d_k * w.x[ im-1 ][ j ][ k ] / rm + d2wdphi2 / rm2sinthe2	+ dvdphi * 2. * costhe / rm2sinthe2 ) / re
-				+ RS_Coriolis_Momentum_phi
-				- h_c_k * w.x[ im - 1 ][ j ][ k ] * k_Force / dphi2;					// immersed boundary condition as a negative force addition
-
- 
-		aux_v.x[ im-1 ][ j ][ k ] = rhs_v.x[ im-1 ][ j ][ k ] + dpdthe / rm;
-		aux_w.x[ im-1 ][ j ][ k ] = rhs_w.x[ im-1 ][ j ][ k ] + dpdphi / rmsinthe;
-
-}
-
-
-
-
-
-
-
-void RHS_Hydrosphere::Pressure_RHS_Hydrosphere ( double ta, double ca, Array_1D &rad, Array_1D &the, Array_1D &phi, Array &h, Array &t, Array &u, Array &v, Array &w, Array &p_dyn, Array &c, Array &tn, Array &un, Array &vn, Array &wn, Array &cn, Array &rhs_t, Array &rhs_u, Array &rhs_v, Array &rhs_w, Array &rhs_c, Array &aux_u, Array &aux_v, Array &aux_w )
-{
-// collection of coefficients for phase transformation
-	c43 = 4. / 3.;
-	c13 = 1. / 3.;
-
-	k_Force = 10.;																			// factor for accelleration of convergence processes inside the immersed boundary conditions
-
-
-// 1. and 2. derivatives for 3 spacial directions and and time in Finite Difference Methods ( FDM )
-
-// collection of coefficients
-	dr2 = dr * dr;
-	dthe2 = dthe * dthe;
-	dphi2 = dphi * dphi;
-
-//	%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%    level i = 0    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-// collection of coefficients
-	rm = rad.z[ 0 ];
-	rm2 = rm * rm;
-
-	for ( int j = 1; j < jm-1; j++ )
-	{
-		for ( int k = 1; k < km-1; k++ )
-		{
-// collection of coefficients
-			sinthe = sin( the.z[ j ] );
-			sinthe2 = sinthe * sinthe;
-			costhe = cos( the.z[ j ] );
-			cotthe = cos( the.z[ j ] ) / sin( the.z[ j ] );
-			rmsinthe = rm * sinthe;
-			rm2sinthe = rm2 * sinthe;
-			rm2sinthe2 = rm2 * sinthe2;
-
-// 1st order derivative for pressure and velocity components
-			dudr = ( 4. * u.x[ 1 ][ j ][ k ] - u.x[ 2 ][ j ][ k ] ) / ( 2. * dr );
-			dvdr = ( - 3. * v.x[ 0 ][ j ][ k ] + 4. * v.x[ 1 ][ j ][ k ] - v.x[ 2 ][ j ][ k ] ) / ( 2. * dr );
-			dwdr = ( - 3. * w.x[ 0 ][ j ][ k ] + 4. * w.x[ 1 ][ j ][ k ] - w.x[ 2 ][ j ][ k ] ) / ( 2. * dr );
-
-			dvdthe = ( v.x[ 0 ][ j+1 ][ k ] - v.x[ 0 ][ j-1 ][ k ] ) / ( 2. * dthe );
-			dwdthe = ( w.x[ 0 ][ j+1 ][ k ] - w.x[ 0 ][ j-1 ][ k ] ) / ( 2. * dthe );
-
-			dvdphi = ( v.x[ 0 ][ j ][ k+1 ] - v.x[ 0 ][ j ][ k-1 ] ) / ( 2. * dphi );
-			dwdphi = ( w.x[ 0 ][ j ][ k+1 ] - w.x[ 0 ][ j ][ k-1 ] ) / ( 2. * dphi );
-
-// 2nd order derivative for pressure and velocity components
-			d2udr2 = ( - 2. * u.x[ 1 ][ j ][ k ] + u.x[ 2 ][ j ][ k ] ) / dr2;
-			d2vdr2 = ( v.x[ 0 ][ j ][ k ] - 2. * v.x[ 1 ][ j ][ k ] + v.x[ 2 ][ j ][ k ] ) / dr2;
-			d2wdr2 = ( w.x[ 0 ][ j ][ k ] - 2. * w.x[ 1 ][ j ][ k ] + w.x[ 2 ][ j ][ k ] ) / dr2;
-
-			d2vdthe2 = ( v.x[ 0 ][ j+1 ][ k ] - 2. * v.x[ 0 ][ j ][ k ] + v.x[ 0 ][ j-1 ][ k ] ) / dthe2;
-			d2wdthe2 = ( w.x[ 0 ][ j+1 ][ k ] - 2. * w.x[ 0 ][ j ][ k ] + w.x[ 0 ][ j-1 ][ k ] ) / dthe2;
-
-			d2vdphi2 = ( v.x[ 0 ][ j ][ k+1 ] - 2. * v.x[ 0 ][ j ][ k ] + v.x[ 0 ][ j ][ k-1 ] ) / dphi2;
-			d2wdphi2 = ( w.x[ 0 ][ j ][ k+1 ] - 2. * w.x[ 0 ][ j ][ k ] + w.x[ 0 ][ j ][ k-1 ] ) / dphi2;
-
-// Coriolis and centrifugal terms in the energy and momentum equations
-			RS_Coriolis_Momentum_rad = + coriolis * 2. * omega * sinthe * w.x[ 0 ][ j ][ k ];
-			RS_Coriolis_Momentum_the = + coriolis * 2. * omega * costhe * w.x[ 0 ][ j ][ k ];
-			RS_Coriolis_Momentum_phi = - coriolis * ( 2. * omega * sinthe * u.x[ 0 ][ j ][ k ] + 2. * omega * costhe * v.x[ 0 ][ j ][ k ] );
-
-			RS_Centrifugal_Momentum_rad = + centrifugal * rad.z[ 0 ] * pow ( ( omega * sinthe ), 2 );
-			RS_Centrifugal_Momentum_the = + centrifugal * rad.z[ 0 ] * sinthe * costhe * pow ( ( omega ), 2 );
-
-
-			if ( t.x[ 0 ][ j ][ k ] < ta ) 
-			{
-				tn.x[ 0 ][ j ][ k ] = ta;
-				cn.x[ 0 ][ j ][ k ] = ca;
-				c_Boussinesq = ( ( ( ta * t_0 - t_0 ) + 346. ) / 10. ) / c_0;
-			}
-			else
-			{
-				c_Boussinesq = ( ( ( tn.x[ 0 ][ j ][ k ] * t_0 - t_0 ) + 346. ) / 10. ) / c_0;
-			}
-
-			RS_buoyancy_Momentum = - buoyancy * .5 * g * ( c.x[ 0 ][ j ][ k ] - c_Boussinesq ) / c_Boussinesq;		// bouyancy based on water vapour 
-
-
-// Right Hand Side of the Navier-Stokes equations at the boundaries for the pressure Poisson equation
-			aux_u.x[ 0 ][ j ][ k ] = ( d2udr2 + d2udthe2 / rm2 + 4. * dudr / rm + d2udphi2 / rm2sinthe2 ) / re
-												+ RS_buoyancy_Momentum
-												+ RS_Coriolis_Momentum_rad + RS_Centrifugal_Momentum_rad;
-
-			aux_v.x[ 0 ][ j ][ k ] = - ( v.x[ 0 ][ j ][ k ] * dvdthe / rm + w.x[ 0 ][ j ][ k ] * dvdphi / rmsinthe ) +
-												+ ( d2vdr2 + dvdr * 2. / rm + d2vdthe2 / rm2 + dvdthe / rm2sinthe * costhe
-												- ( 1. + costhe * costhe / ( rm * sinthe2 ) ) * v.x[ 0 ][ j ][ k ] / rm + d2vdphi2 / rm2sinthe2
-												+ 2. * dudthe / rm2 - dwdphi * 2. * costhe / rm2sinthe2 ) / re
-												+ RS_Coriolis_Momentum_the + RS_Centrifugal_Momentum_the
-												- v.x[ 0 ][ j ][ k ] * k_Force / dthe2;
-
-			aux_w.x[ 0 ][ j ][ k ] = - ( v.x[ 0 ][ j ][ k ] * dwdthe / rm + w.x[ 0 ][ j ][ k ] * dwdphi / rmsinthe ) +
-												+ ( d2wdr2 + dwdr * 2. / rm + d2wdthe2 / rm2 + dwdthe / rm2sinthe  * costhe
-												- ( 1. + costhe * costhe / ( rm * sinthe2 ) ) * w.x[ 0 ][ j ][ k ] / rm + d2wdphi2 / rm2sinthe2
-												+ 2. * dudphi / rm2sinthe + dvdphi * 2. * costhe / rm2sinthe2 ) / re
-												+ RS_Coriolis_Momentum_phi
-												- w.x[ 0 ][ j ][ k ] * k_Force / dphi2;
-
-
-
-//	%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%    level i = im-1    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-// collection of coefficients
-			rm = rad.z[ im-1 ];
-			rm2 = rm * rm;
-
-// collection of coefficients
-			sinthe = sin( the.z[ j ] );
-			sinthe2 = sinthe * sinthe;
-			costhe = cos( the.z[ j ] );
-			cotthe = cos( the.z[ j ] ) / sin( the.z[ j ] );
-			rmsinthe = rm * sinthe;
-			rm2sinthe = rm2 * sinthe;
-			rm2sinthe2 = rm2 * sinthe2;
-
-// 1st order derivative for pressure and velocity components
-			dudr = ( 4. * u.x[ im-2 ][ j ][ k ] - u.x[ im-3 ][ j ][ k ] ) / ( 2. * dr );
-			dvdr = ( - 3. * v.x[ im-1 ][ j ][ k ] + 4. * v.x[ im-2 ][ j ][ k ] - v.x[ im-3 ][ j ][ k ] ) / ( 2. * dr );
-			dwdr = ( - 3. * w.x[ im-1 ][ j ][ k ] + 4. * w.x[ im-2 ][ j ][ k ] - w.x[ im-3 ][ j ][ k ] ) / ( 2. * dr );
-
-			dvdthe = ( v.x[ im-1 ][ j+1 ][ k ] - v.x[ im-1 ][ j-1 ][ k ] ) / ( 2. * dthe );
-			dwdthe = ( w.x[ im-1 ][ j+1 ][ k ] - w.x[ im-1 ][ j-1 ][ k ] ) / ( 2. * dthe );
-
-			dvdphi = ( v.x[ im-1 ][ j ][ k+1 ] - v.x[ im-1 ][ j ][ k-1 ] ) / ( 2. * dphi );
-			dwdphi = ( w.x[ im-1 ][ j ][ k+1 ] - w.x[ im-1 ][ j ][ k-1 ] ) / ( 2. * dphi );
-
-// 2nd order derivative for pressure and velocity components
-			d2udr2 = ( - 2. * u.x[ im-2 ][ j ][ k ] + u.x[ im-3 ][ j ][ k ] ) / dr2;
-			d2vdr2 = ( v.x[ im-1 ][ j ][ k ] - 2. * v.x[ im-2 ][ j ][ k ] + v.x[ im-3 ][ j ][ k ] ) / dr2;
-			d2wdr2 = ( w.x[ im-1 ][ j ][ k ] - 2. * w.x[ im-2 ][ j ][ k ] + w.x[ im-3 ][ j ][ k ] ) / dr2;
-
-			d2vdthe2 = ( v.x[ im-1 ][ j+1 ][ k ] - 2. * v.x[ im-1 ][ j ][ k ] + v.x[ im-1 ][ j-1 ][ k ] ) / dthe2;
-			d2wdthe2 = ( w.x[ im-1 ][ j+1 ][ k ] - 2. * w.x[ im-1 ][ j ][ k ] + w.x[ im-1 ][ j-1 ][ k ] ) / dthe2;
-
-			d2vdphi2 = ( v.x[ im-1 ][ j ][ k+1 ] - 2. * v.x[ im-1 ][ j ][ k ] + v.x[ im-1 ][ j ][ k-1 ] ) / dphi2;
-			d2wdphi2 = ( w.x[ im-1 ][ j ][ k+1 ] - 2. * w.x[ im-1 ][ j ][ k ] + w.x[ im-1 ][ j ][ k-1 ] ) / dphi2;
-
-// Coriolis and centrifugal terms in the energy and momentum equations
-			RS_Coriolis_Momentum_rad = + coriolis * 2. * omega * sinthe * w.x[ im-1 ][ j ][ k ];
-			RS_Coriolis_Momentum_the = + coriolis * 2. * omega * costhe * w.x[ im-1 ][ j ][ k ];
-			RS_Coriolis_Momentum_phi = - coriolis * ( 2. * omega * sinthe * u.x[ im-1 ][ j ][ k ] + 2. * omega * costhe * v.x[ im-1 ][ j ][ k ] );
-
-			RS_Centrifugal_Momentum_rad = + centrifugal * rad.z[ im-1 ] * pow ( ( omega * sinthe ), 2 );
-			RS_Centrifugal_Momentum_the = + centrifugal * rad.z[ im-1 ] * sinthe * costhe * pow ( ( omega ), 2 );
-
-			if ( t.x[ im-1 ][ j ][ k ] < ta ) 
-			{
-				tn.x[ im-1 ][ j ][ k ] = ta;
-				cn.x[ im-1 ][ j ][ k ] = ca;
-				c_Boussinesq = ( ( ( ta * t_0 - t_0 ) + 346. ) / 10. ) / c_0;
-			}
-			else
-			{
-				c_Boussinesq = ( ( ( tn.x[ im-1 ][ j ][ k ] * t_0 - t_0 ) + 346. ) / 10. ) / c_0;
-			}
-
-			RS_buoyancy_Momentum = - buoyancy * .5 * g * ( c.x[ im-1 ][ j ][ k ] - c_Boussinesq ) / c_Boussinesq;		// bouyancy based on water vapour 
-
-// Right Hand Side of the Navier-Stokes equations at the boundaries for the pressure Poisson equation
-			aux_u.x[ im-1 ][ j ][ k ] = + ( d2udr2 + d2udthe2 / rm2 + 4. * dudr / rm + d2udphi2 / rm2sinthe2 ) / re
-													+ RS_buoyancy_Momentum
-													+ RS_Coriolis_Momentum_rad + RS_Centrifugal_Momentum_rad;
-
-			aux_v.x[ im-1 ][ j ][ k ] =  - ( v.x[ im-1 ][ j ][ k ] * dvdthe / rm + w.x[ im-1 ][ j ][ k ] * dvdphi / rmsinthe ) +
-													+ ( d2vdr2 + dvdr * 2. / rm + d2vdthe2 / rm2 + dvdthe / rm2sinthe * costhe
-													- ( 1. + costhe * costhe / ( rm * sinthe2 ) ) * v.x[ im-1 ][ j ][ k ] / rm + d2vdphi2 / rm2sinthe2
-													+ 2. * dudthe / rm2 - dwdphi * 2. * costhe / rm2sinthe2 ) / re
-													+ RS_Coriolis_Momentum_the + RS_Centrifugal_Momentum_the
-													- v.x[ im-1 ][ j ][ k ] * k_Force / dthe2;
-
-			aux_w.x[ im-1 ][ j ][ k ] =  - ( v.x[ im-1 ][ j ][ k ] * dwdthe / rm + w.x[ im-1 ][ j ][ k ] * dwdphi / rmsinthe ) +
-														+ ( d2wdr2 + dwdr * 2. / rm + d2wdthe2 / rm2 + dwdthe / rm2sinthe  * costhe
-														- ( 1. + costhe * costhe / ( rm * sinthe2 ) ) * w.x[ im-1 ][ j ][ k ] / rm + d2wdphi2 / rm2sinthe2
-														+ 2. * dudphi / rm2sinthe + dvdphi * 2. * costhe / rm2sinthe2 ) / re
-														+ RS_Coriolis_Momentum_phi
-														- w.x[ im-1 ][ j ][ k ] * k_Force / dphi2;
-		}
-	}
-
-
-
-//	%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%    level k = 0    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-
-	for ( int i = 1; i < im-1; i++ )
-	{
-		for ( int j = 1; j < jm-1; j++ )
-		{
-// collection of coefficients
-			rm = rad.z[ i ];
-			rm2 = rm * rm;
-			sinthe = sin( the.z[ j ] );
-			sinthe2 = sinthe * sinthe;
-			costhe = cos( the.z[ j ] );
-			cotthe = cos( the.z[ j ] ) / sin( the.z[ j ] );
-			rmsinthe = rm * sinthe;
-			rm2sinthe = rm2 * sinthe;
-			rm2sinthe2 = rm2 * sinthe2;
-
-// 1st order derivative for pressure and velocity components
-			dudr = ( u.x[ i+1 ][ j ][ 0 ] - u.x[ i-1 ][ j ][ 0 ] ) / ( 2. * dr );
-			dvdr = ( v.x[ i+1 ][ j ][ 0 ] - v.x[ i-1 ][ j ][ 0 ] ) / ( 2. * dr );
-			dwdr = ( w.x[ i+1 ][ j ][ 0 ] - w.x[ i-1 ][ j ][ 0 ] ) / ( 2. * dr );
-
-			dudthe = ( u.x[ i ][ j+1 ][ 0 ] - u.x[ i ][ j-1 ][ 0 ] ) / ( 2. * dthe );
-			dvdthe = ( v.x[ i ][ j+1 ][ 0 ] - v.x[ i ][ j-1 ][ 0 ] ) / ( 2. * dthe );
-			dwdthe = ( w.x[ i ][ j+1 ][ 0 ] - w.x[ i ][ j-1 ][ 0 ] ) / ( 2. * dthe );
-
-			dudphi = ( - 3. * u.x[ i ][ j ][ 0 ] + 4. * u.x[ i ][ j ][ 1 ] - u.x[ i ][ j ][ 2 ] ) / ( 2. * dphi );
-			dvdphi = ( - 3. * v.x[ i ][ j ][ 0 ] + 4. * v.x[ i ][ j ][ 1 ] - v.x[ i ][ j ][ 2 ] ) / ( 2. * dphi );
-			dwdphi = ( - 3. * w.x[ i ][ j ][ 0 ] + 4. * w.x[ i ][ j ][ 1 ] - w.x[ i ][ j ][ 2 ] ) / ( 2. * dphi );
-
-// 2nd order derivative for pressure and velocity components
-			d2udr2 = ( u.x[ i ][ j ][ 0 ] - 2. * u.x[ i ][ j ][ 0 ] + u.x[ i ][ j ][ 0 ] ) / dr2;
-			d2vdr2 = ( v.x[ i ][ j ][ 0 ] - 2. * v.x[ i ][ j ][ 0 ] + v.x[ i ][ j ][ 0 ] ) / dr2;
-			d2wdr2 = ( w.x[ i ][ j ][ 0 ] - 2. * w.x[ i ][ j ][ 0 ] + w.x[ i ][ j ][ 0 ] ) / dr2;
-
-			d2udthe2 = ( u.x[ i ][ j+1 ][ 0 ] - 2. * u.x[ i ][ j ][ 0 ] + u.x[ i ][ j-1 ][ 0 ] ) / dthe2;
-			d2vdthe2 = ( v.x[ i ][ j+1 ][ 0 ] - 2. * v.x[ i ][ j ][ 0 ] + v.x[ i ][ j-1 ][ 0 ] ) / dthe2;
-			d2wdthe2 = ( w.x[ i ][ j+1 ][ 0 ] - 2. * w.x[ i ][ j ][ 0 ] + w.x[ i ][ j-1 ][ 0 ] ) / dthe2;
-
-			d2udphi2 = ( u.x[ i ][ j ][ 0 ] - 2. * u.x[ i ][ j ][ 1 ] + u.x[ i ][ j ][ 2 ] ) / dphi2;
-			d2vdphi2 = ( v.x[ i ][ j ][ 0 ] - 2. * v.x[ i ][ j ][ 1 ] + v.x[ i ][ j ][ 2 ] ) / dphi2;
-			d2wdphi2 = ( w.x[ i ][ j ][ 0 ] - 2. * w.x[ i ][ j ][ 1 ] + w.x[ i ][ j ][ 2 ] ) / dphi2;
-
-// Coriolis and centrifugal terms in the energy and momentum equations
-			RS_Coriolis_Momentum_rad = + coriolis * 2. * omega * sinthe * w.x[ i ][ j ][ 0 ];
-			RS_Coriolis_Momentum_the = + coriolis * 2. * omega * costhe * w.x[ i ][ j ][ 0 ];
-			RS_Coriolis_Momentum_phi = - coriolis * ( 2. * omega * sinthe * u.x[ i ][ j ][ 0 ] + 2. * omega * costhe * v.x[ i ][ j ][ 0 ] );
-
-			RS_Centrifugal_Momentum_rad = + centrifugal * rad.z[ i ] * pow ( ( omega * sinthe ), 2 );
-			RS_Centrifugal_Momentum_the = + centrifugal * rad.z[ i ] * sinthe * costhe * pow ( ( omega ), 2 );
-
-			if ( t.x[ i ][ j ][ 0 ] < ta ) 
-			{
-				tn.x[ i ][ j ][ 0 ] = ta;
-				cn.x[ i ][ j ][ 0 ] = ca;
-				c_Boussinesq = ( ( ( ta * t_0 - t_0 ) + 346. ) / 10. ) / c_0;
-			}
-			else
-			{
-				c_Boussinesq = ( ( ( tn.x[ i ][ j ][ 0 ] * t_0 - t_0 ) + 346. ) / 10. ) / c_0;
-			}
-
-			RS_buoyancy_Momentum = - buoyancy * .5 * g * ( c.x[ i ][ j ][ 0 ] - c_Boussinesq ) / c_Boussinesq;		// bouyancy based on water vapour 
-
-// Right Hand Side of the Navier-Stokes equations at the boundaries for the pressure Poisson equation
-			aux_u.x[ i ][ j ][ 0 ] = - ( u.x[ i ][ j ][ 0 ] * dudr + v.x[ i ][ j ][ 0 ] * dudthe / rm + w.x[ i ][ j ][ 0 ] * dudphi / rmsinthe )
-												- ( d2udr2 + h_d_i * 2. * u.x[ i ][ j ][ 0 ] / rm2 + d2udthe2 / rm2 + 4. * dudr / rm + dudthe * costhe / rm2sinthe + d2udphi2 / rm2sinthe2 ) / re
-												+ RS_buoyancy_Momentum
-												+ RS_Coriolis_Momentum_rad + RS_Centrifugal_Momentum_rad;
-
-			aux_v.x[ i ][ j ][ 0 ] = - ( u.x[ i ][ j ][ 0 ] * dvdr + v.x[ i ][ j ][ 0 ] * dvdthe / rm + w.x[ i ][ j ][ 0 ] * dvdphi / rmsinthe ) +
-												+ ( d2vdr2 + dvdr * 2. / rm + d2vdthe2 / rm2 + dvdthe / rm2sinthe * costhe
-												- ( 1. + costhe * costhe / ( rm * sinthe2 ) ) * v.x[ i ][ j ][ 0 ] / rm + d2vdphi2 / rm2sinthe2
-												+ 2. * dudthe / rm2 - dwdphi * 2. * costhe / rm2sinthe2 ) / re
-												+ RS_Coriolis_Momentum_the + RS_Centrifugal_Momentum_the
-												- v.x[ i ][ j ][ 0 ] * k_Force / dthe2;
-
-			aux_w.x[ i ][ j ][ 0 ] = - ( u.x[ i ][ j ][ 0 ] * dwdr + v.x[ i ][ j ][ 0 ] * dwdthe / rm + w.x[ i ][ j ][ 0 ] * dwdphi / rmsinthe ) +
-												+ ( d2wdr2 + dwdr * 2. / rm + d2wdthe2 / rm2 + dwdthe / rm2sinthe  * costhe
-												- ( 1. + costhe * costhe / ( rm * sinthe2 ) ) * w.x[ i ][ j ][ 0 ] / rm + d2wdphi2 / rm2sinthe2
-												+ 2. * dudphi / rm2sinthe + dvdphi * 2. * costhe / rm2sinthe2 ) / re
-												+ RS_Coriolis_Momentum_phi
-												- w.x[ i ][ j ][ 0 ] * k_Force / dphi2;
-
-
-
-//	%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%    level k = km-1    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-// collection of coefficients
-			rm = rad.z[ i ];
-			rm2 = rm * rm;
-			sinthe = sin( the.z[ j ] );
-			sinthe2 = sinthe * sinthe;
-			costhe = cos( the.z[ j ] );
-			cotthe = cos( the.z[ j ] ) / sin( the.z[ j ] );
-			rmsinthe = rm * sinthe;
-			rm2sinthe = rm2 * sinthe;
-			rm2sinthe2 = rm2 * sinthe2;
-
-// 1st order derivative for pressure and velocity components
-			dudr = ( u.x[ i+1 ][ j ][ km-1 ] - u.x[ i-1 ][ j ][ km-1 ] ) / ( 2. * dr );
-			dvdr = ( v.x[ i+1 ][ j ][ km-1 ] - v.x[ i-1 ][ j ][ km-1 ] ) / ( 2. * dr );
-			dwdr = ( w.x[ i+1 ][ j ][ km-1 ] - w.x[ i-1 ][ j ][ km-1 ] ) / ( 2. * dr );
-
-			dudthe = ( u.x[ i ][ j+1 ][ km-1 ] - u.x[ i ][ j-1 ][ km-1 ] ) / ( 2. * dthe );
-			dvdthe = ( v.x[ i ][ j+1 ][ km-1 ] - v.x[ i ][ j-1 ][ km-1 ] ) / ( 2. * dthe );
-			dwdthe = ( w.x[ i ][ j+1 ][ km-1 ] - w.x[ i ][ j-1 ][ km-1 ] ) / ( 2. * dthe );
-
-			dudphi = ( - 3. * u.x[ i ][ j ][ km-1 ] + 4. * u.x[ i ][ j ][ km-2 ] - u.x[ i ][ j ][ km-3 ] ) / ( 2. * dphi );
-			dvdphi = ( - 3. * v.x[ i ][ j ][ km-1 ] + 4. * v.x[ i ][ j ][ km-2 ] - v.x[ i ][ j ][ km-3 ] ) / ( 2. * dphi );
-			dwdphi = ( - 3. * w.x[ i ][ j ][ km-1 ] + 4. * w.x[ i ][ j ][ km-2 ] - w.x[ i ][ j ][ km-3 ] ) / ( 2. * dphi );
-
-// 2nd order derivative for pressure and velocity components
-			d2udr2 = ( u.x[ i ][ j ][ km-1 ] - 2. * u.x[ i ][ j ][ km-1 ] + u.x[ i ][ j ][ km-1 ] ) / dr2;
-			d2vdr2 = ( v.x[ i ][ j ][ km-1 ] - 2. * v.x[ i ][ j ][ km-1 ] + v.x[ i ][ j ][ km-1 ] ) / dr2;
-			d2wdr2 = ( w.x[ i ][ j ][ km-1 ] - 2. * w.x[ i ][ j ][ km-1 ] + w.x[ i ][ j ][ km-1 ] ) / dr2;
-
-			d2udthe2 = ( u.x[ i ][ j+1 ][ km-1 ] - 2. * u.x[ i ][ j ][ km-1 ] + u.x[ i ][ j-1 ][ km-1 ] ) / dthe2;
-			d2vdthe2 = ( v.x[ i ][ j+1 ][ km-1 ] - 2. * v.x[ i ][ j ][ km-1 ] + v.x[ i ][ j-1 ][ km-1 ] ) / dthe2;
-			d2wdthe2 = ( w.x[ i ][ j+1 ][ km-1 ] - 2. * w.x[ i ][ j ][ km-1 ] + w.x[ i ][ j-1 ][ km-1 ] ) / dthe2;
-
-			d2udphi2 = ( u.x[ i ][ j ][ km-1 ] - 2. * u.x[ i ][ j ][ km-2 ] + u.x[ i ][ j ][ km-3 ] ) / dphi2;
-			d2vdphi2 = ( v.x[ i ][ j ][ km-1 ] - 2. * v.x[ i ][ j ][ km-2 ] + v.x[ i ][ j ][ km-3 ] ) / dphi2;
-			d2wdphi2 = ( w.x[ i ][ j ][ km-1 ] - 2. * w.x[ i ][ j ][ 2 ] + w.x[ i ][ j ][ km-3 ] ) / dphi2;
-
-// Coriolis and centrifugal terms in the energy and momentum equations
-			RS_Coriolis_Momentum_rad = + coriolis * 2. * omega * sinthe * w.x[ i ][ j ][ km-1 ];
-			RS_Coriolis_Momentum_the = + coriolis * 2. * omega * costhe * w.x[ i ][ j ][ km-1 ];
-			RS_Coriolis_Momentum_phi = - coriolis * ( 2. * omega * sinthe * u.x[ i ][ j ][ km-1 ] + 2. * omega * costhe * v.x[ i ][ j ][ km-1 ] );
-
-			RS_Centrifugal_Momentum_rad = + centrifugal * rad.z[ i ] * pow ( ( omega * sinthe ), 2 );
-			RS_Centrifugal_Momentum_the = + centrifugal * rad.z[ i ] * sinthe * costhe * pow ( ( omega ), 2 );
-
-			if ( t.x[ i ][ j ][ km-1 ] < ta ) 
-			{
-				tn.x[ i ][ j ][ km-1 ] = ta;
-				cn.x[ i ][ j ][ km-1 ] = ca;
-				c_Boussinesq = ( ( ( ta * t_0 - t_0 ) + 346. ) / 10. ) / c_0;
-			}
-			else
-			{
-				c_Boussinesq = ( ( ( tn.x[ i ][ j ][ km-1 ] * t_0 - t_0 ) + 346. ) / 10. ) / c_0;
-			}
-
-			RS_buoyancy_Momentum = - buoyancy * .5 * g * ( c.x[ i ][ j ][ km-1 ] - c_Boussinesq ) / c_Boussinesq;		// bouyancy based on water vapour 
-
-
-// Right Hand Side of the Navier-Stokes equations at the boundaries for the pressure Poisson equation
-			aux_u.x[ i ][ j ][ km-1 ] = - ( u.x[ i ][ j ][ km-1 ] * dudr + v.x[ i ][ j ][ km-1 ] * dudthe / rm + w.x[ i ][ j ][ km-1 ] * dudphi / rmsinthe )
-												+ ( d2udr2 + d2udthe2 / rm2 + 4. * dudr / rm + d2udphi2 / rm2sinthe2 ) / re
-												+ RS_buoyancy_Momentum
-												+ RS_Coriolis_Momentum_rad + RS_Centrifugal_Momentum_rad;
-
-			aux_v.x[ i ][ j ][ km-1 ] = - ( u.x[ i ][ j ][ km-1 ] * dvdr + v.x[ i ][ j ][ km-1 ] * dvdthe / rm + w.x[ i ][ j ][ km-1 ] * dvdphi / rmsinthe ) +
-												+ ( d2vdr2 + dvdr * 2. / rm + d2vdthe2 / rm2 + dvdthe / rm2sinthe * costhe
-												- ( 1. + costhe * costhe / ( rm * sinthe2 ) ) * v.x[ i ][ j ][ km-1 ] / rm + d2vdphi2 / rm2sinthe2
-												+ 2. * dudthe / rm2 - dwdphi * 2. * costhe / rm2sinthe2 ) / re
-												+ RS_Coriolis_Momentum_the + RS_Centrifugal_Momentum_the
-												- v.x[ i ][ j ][ km-1 ] * k_Force / dthe2;
-
-			aux_w.x[ i ][ j ][ km-1 ] = - ( u.x[ i ][ j ][ km-1 ] * dwdr + v.x[ i ][ j ][ km-1 ] * dwdthe / rm + w.x[ i ][ j ][ km-1 ] * dwdphi / rmsinthe ) +
-												+ ( d2wdr2 + dwdr * 2. / rm + d2wdthe2 / rm2 + dwdthe / rm2sinthe  * costhe
-												- ( 1. + costhe * costhe / ( rm * sinthe2 ) ) * w.x[ i ][ j ][ km-1 ] / rm + d2wdphi2 / rm2sinthe2
-												+ 2. * dudphi / rm2sinthe + dvdphi * 2. * costhe / rm2sinthe2 ) / re
-												+ RS_Coriolis_Momentum_phi
-												- w.x[ i ][ j ][ km-1 ] * k_Force / dphi2;
-			}
-	}
-
-
-
-//	%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%    level j = 0    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-
-	for ( int i = 1; i < im-1; i++ )
-	{
-		for ( int k = 1; k < km-1; k++ )
-		{
-// collection of coefficients
-			rm = rad.z[ i ];
-			rm2 = rm * rm;
-			sinthe = sin( the.z[ 0 ] );
-			sinthe2 = sinthe * sinthe;
-			costhe = cos( the.z[ 0 ] );
-			cotthe = cos( the.z[ 0 ] ) / sin( the.z[ 0 ] );
-			rmsinthe = rm * sinthe;
-			rm2sinthe = rm2 * sinthe;
-			rm2sinthe2 = rm2 * sinthe2;
-
-// 1st order derivative for pressure and velocity components
-			dudr = ( u.x[ i+1 ][ 0 ][ k ] - u.x[ i-1 ][ 0 ][ k ] ) / ( 2. * dr );
-			dvdr = ( v.x[ i+1 ][ 0 ][ k ] - v.x[ i-1 ][ 0 ][ k ] ) / ( 2. * dr );
-			dwdr = ( w.x[ i+1 ][ 0 ][ k ] - w.x[ i-1 ][ 0 ][ k ] ) / ( 2. * dr );
-
-			dudthe = ( - 3. * u.x[ i ][ 0 ][ k ] + 4. * u.x[ i ][ 1 ][ k ] - u.x[ i ][ 2 ][ k ] ) / ( 2. * dthe );
-			dvdthe = ( - 3. * v.x[ i ][ 0 ][ k ] + 4. * v.x[ i ][ 1 ][ k ] - v.x[ i ][ 2 ][ k ] ) / ( 2. * dthe );
-			dwdthe = ( - 3. * w.x[ i ][ 0 ][ k ] + 4. * w.x[ i ][ 1 ][ k ] - w.x[ i ][ 2 ][ k ] ) / ( 2. * dthe );
-
-			dudphi = ( u.x[ i ][ 0 ][ k+1 ] - u.x[ i ][ 0 ][ k-1 ] ) / ( 2. * dphi );
-			dvdphi = ( v.x[ i ][ 0 ][ k+1 ] - v.x[ i ][ 0 ][ k-1 ] ) / ( 2. * dphi );
-			dwdphi = ( w.x[ i ][ 0 ][ k+1 ] - w.x[ i ][ 0 ][ k-1 ] ) / ( 2. * dphi );
-
-// 2nd order derivative for pressure and velocity components
-			d2udr2 = ( u.x[ i+1 ][ 0 ][ k ] - 2. * u.x[ i ][ 0 ][ k ] + u.x[ i-1 ][ 0 ][ k ] ) / dr2;
-			d2vdr2 = ( v.x[ i+1 ][ 0 ][ k ] - 2. * v.x[ i ][ 0 ][ k ] + v.x[ i-1 ][ 0 ][ k ] ) / dr2;
-			d2wdr2 = ( w.x[ i+1 ][ 0 ][ k ] - 2. * w.x[ i ][ 0 ][ k ] + w.x[ i-1 ][ 0 ][ k ] ) / dr2;
-
-			d2udthe2 = ( u.x[ i ][ 0 ][ k ] - 2. * u.x[ i ][ 1 ][ k ] + u.x[ i ][ 2 ][ k ] ) / dthe2;
-			d2vdthe2 = ( v.x[ i ][ 0 ][ k ] - 2. * v.x[ i ][ 1 ][ k ] + v.x[ i ][ 2 ][ k ] ) / dthe2;
-			d2wdthe2 = ( w.x[ i ][ 0 ][ k ] - 2. * w.x[ i ][ 1 ][ k ] + w.x[ i ][ 2 ][ k ] ) / dthe2;
-
-			d2udphi2 = ( u.x[ i ][ 0 ][ k+1 ] - 2. * u.x[ i ][ 0 ][ k ] + u.x[ i ][ 0 ][ k-1 ] ) / dphi2;
-			d2vdphi2 = ( v.x[ i ][ 0 ][ k+1 ] - 2. * v.x[ i ][ 0 ][ k ] + v.x[ i ][ 0 ][ k-1 ] ) / dphi2;
-			d2wdphi2 = ( w.x[ i ][ 0 ][ k+1 ] - 2. * w.x[ i ][ 0 ][ k ] + w.x[ i ][ 0 ][ k-1 ] ) / dphi2;
-
-// Coriolis and centrifugal terms in the energy and momentum equations
-			RS_Centrifugal_Momentum_rad = + centrifugal * rad.z[ i ] * pow ( ( omega * sinthe ), 2 );
-			RS_Centrifugal_Momentum_the = + centrifugal * rad.z[ i ] * sinthe * costhe * pow ( ( omega ), 2 );
-
-			if ( t.x[ i ][ 0 ][ k ] < ta ) 
-			{
-				tn.x[ i ][ 0 ][ k ] = ta;
-				cn.x[ i ][ 0 ][ k ] = ca;
-				c_Boussinesq = ( ( ( ta * t_0 - t_0 ) + 346. ) / 10. ) / c_0;
-			}
-			else
-			{
-				c_Boussinesq = ( ( ( tn.x[ i ][ 0 ][ k ] * t_0 - t_0 ) + 346. ) / 10. ) / c_0;
-			}
-
-			RS_buoyancy_Momentum = - buoyancy * .5 * g * ( c.x[ i ][ 0 ][ k ] - c_Boussinesq ) / c_Boussinesq;		// bouyancy based on water vapour 
-
-
-// Right Hand Side of the Navier-Stokes equations at the boundaries for the pressure Poisson equation
-			aux_u.x[ i ][ 0 ][ k ] = - u.x[ i ][ 0 ][ k ] * dudr
-												+ ( d2udr2 + d2udthe2 / rm2 + 4. * dudr / rm + d2udphi2 / rm2sinthe2 ) / re
-												+ RS_buoyancy_Momentum
-												+ RS_Centrifugal_Momentum_rad;
-
-			aux_v.x[ i ][ 0 ][ k ] = 0.;
-
-/*
-			aux_v.x[ i ][ 0 ][ k ] = - u.x[ i ][ 0 ][ k ] * dvdr
-												+ ( d2vdr2 + dvdr * 2. / rm + d2vdthe2 / rm2 + dvdthe / rm2sinthe * costhe
-												+ d2vdphi2 / rm2sinthe2
-												+ 2. * dudthe / rm2 - dwdphi * 2. * costhe / rm2sinthe2 ) / re
-												+ RS_Centrifugal_Momentum_the
-												- v.x[ i ][ 0 ][ k ] * k_Force / dthe2;
-*/
-			aux_w.x[ i ][ 0 ][ k ] = 0.;
-/*
-			aux_w.x[ i ][ 0 ][ k ] = - u.x[ i ][ 0 ][ k ] * dwdr
-												+ ( d2wdr2 + dwdr * 2. / rm + d2wdthe2 / rm2 + dwdthe / rm2sinthe  * costhe
-												+ d2wdphi2 / rm2sinthe2
-												+ 2. * dudphi / rm2sinthe + dvdphi * 2. * costhe / rm2sinthe2 ) / re
-												- w.x[ i ][ 0 ][ k ] * k_Force / dphi2;
-*/
-
-
-//	%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%    level j = jm-1    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-
-// collection of coefficients
-			rm = rad.z[ i ];
-			rm2 = rm * rm;
-			sinthe = sin( the.z[ jm-1 ] );
-			sinthe2 = sinthe * sinthe;
-			costhe = cos( the.z[ jm-1 ] );
-			cotthe = cos( the.z[ jm-1 ] ) / sin( the.z[ jm-1 ] );
-			rmsinthe = rm * sinthe;
-			rm2sinthe = rm2 * sinthe;
-			rm2sinthe2 = rm2 * sinthe2;
-
-// 1st order derivative for pressure and velocity components
-			dudr = ( u.x[ i+1 ][ jm-1 ][ k ] - u.x[ i-1 ][ jm-1 ][ k ] ) / ( 2. * dr );
-			dvdr = ( v.x[ i+1 ][ jm-1 ][ k ] - v.x[ i-1 ][ jm-1 ][ k ] ) / ( 2. * dr );
-			dwdr = ( w.x[ i+1 ][ jm-1 ][ k ] - w.x[ i-1 ][ jm-1 ][ k ] ) / ( 2. * dr );
-
-			dudthe = ( - 3. * u.x[ i ][ jm-1 ][ k ] + 4. * u.x[ i ][ 1 ][ k ] - u.x[ i ][ 2 ][ k ] ) / ( 2. * dthe );
-			dvdthe = ( - 3. * v.x[ i ][ jm-1 ][ k ] + 4. * v.x[ i ][ 1 ][ k ] - v.x[ i ][ 2 ][ k ] ) / ( 2. * dthe );
-			dwdthe = ( - 3. * w.x[ i ][ jm-1 ][ k ] + 4. * w.x[ i ][ 1 ][ k ] - w.x[ i ][ 2 ][ k ] ) / ( 2. * dthe );
-
-			dudphi = ( u.x[ i ][ jm-1 ][ k+1 ] - u.x[ i ][ jm-1 ][ k-1 ] ) / ( 2. * dphi );
-			dvdphi = ( v.x[ i ][ jm-1 ][ k+1 ] - v.x[ i ][ jm-1 ][ k-1 ] ) / ( 2. * dphi );
-			dwdphi = ( w.x[ i ][ jm-1 ][ k+1 ] - w.x[ i ][ jm-1 ][ k-1 ] ) / ( 2. * dphi );
-
-// 2nd order derivative for pressure and velocity components
-			d2udr2 = ( u.x[ i+1 ][ jm-1 ][ k ] - 2. * u.x[ i ][ jm-1 ][ k ] + u.x[ i-1 ][ jm-1 ][ k ] ) / dr2;
-			d2vdr2 = ( v.x[ i+1 ][ jm-1 ][ k ] - 2. * v.x[ i ][ jm-1 ][ k ] + v.x[ i-1 ][ jm-1 ][ k ] ) / dr2;
-			d2wdr2 = ( w.x[ i+1 ][ jm-1 ][ k ] - 2. * w.x[ i ][ jm-1 ][ k ] + w.x[ i-1 ][ jm-1 ][ k ] ) / dr2;
-
-			d2udthe2 = ( u.x[ i ][ jm-1 ][ k ] - 2. * u.x[ i ][ 1 ][ k ] + u.x[ i ][ 2 ][ k ] ) / dthe2;
-			d2vdthe2 = ( v.x[ i ][ jm-1 ][ k ] - 2. * v.x[ i ][ 1 ][ k ] + v.x[ i ][ 2 ][ k ] ) / dthe2;
-			d2wdthe2 = ( w.x[ i ][ jm-1 ][ k ] - 2. * w.x[ i ][ 1 ][ k ] + w.x[ i ][ 2 ][ k ] ) / dthe2;
-
-			d2udphi2 = ( u.x[ i ][ jm-1 ][ k+1 ] - 2. * u.x[ i ][ jm-1 ][ k ] + u.x[ i ][ jm-1 ][ k-1 ] ) / dphi2;
-			d2vdphi2 = ( v.x[ i ][ jm-1 ][ k+1 ] - 2. * v.x[ i ][ jm-1 ][ k ] + v.x[ i ][ jm-1 ][ k-1 ] ) / dphi2;
-			d2wdphi2 = ( w.x[ i ][ jm-1 ][ k+1 ] - 2. * w.x[ i ][ jm-1 ][ k ] + w.x[ i ][ jm-1 ][ k-1 ] ) / dphi2;
-
-// Coriolis and centrifugal terms in the energy and momentum equations
-			RS_Centrifugal_Momentum_rad = + centrifugal * rad.z[ i ] * pow ( ( omega * sinthe ), 2 );
-			RS_Centrifugal_Momentum_the = + centrifugal * rad.z[ i ] * sinthe * costhe * pow ( ( omega ), 2 );
-
-			if ( t.x[ i ][ jm-1 ][ k ] < ta ) 
-			{
-				tn.x[ i ][ jm-1 ][ k ] = ta;
-				cn.x[ i ][ jm-1 ][ k ] = ca;
-				c_Boussinesq = ( ( ( ta * t_0 - t_0 ) + 346. ) / 10. ) / c_0;
-			}
-			else
-			{
-				c_Boussinesq = ( ( ( tn.x[ i ][ jm-1 ][ k ] * t_0 - t_0 ) + 346. ) / 10. ) / c_0;
-			}
-
-			RS_buoyancy_Momentum = - buoyancy * .5 * g * ( c.x[ i ][ jm-1 ][ k ] - c_Boussinesq ) / c_Boussinesq;		// bouyancy based on water vapour 
-
-
-// Right Hand Side of the Navier-Stokes equations at the boundaries for the pressure Poisson equation
-			aux_u.x[ i ][ jm-1 ][ k ] = - u.x[ i ][ jm-1 ][ k ] * dudr
-												+ ( d2udr2 + d2udthe2 / rm2 + 4. * dudr / rm + d2udphi2 / rm2sinthe2 ) / re
-												+ RS_buoyancy_Momentum
-												+ RS_Centrifugal_Momentum_rad;
-
-			aux_v.x[ i ][ jm-1 ][ k ] = - u.x[ i ][ jm-1 ][ k ] * dvdr
-												+ ( d2vdr2 + dvdr * 2. / rm + d2vdthe2 / rm2 + dvdthe / rm2sinthe * costhe
-												+ d2vdphi2 / rm2sinthe2
-												+ 2. * dudthe / rm2 - dwdphi * 2. * costhe / rm2sinthe2 ) / re
-												+ RS_Centrifugal_Momentum_the
-												- v.x[ i ][ jm-1 ][ k ] * k_Force / dthe2;
-
-			aux_w.x[ i ][ jm-1 ][ k ] = - u.x[ i ][ jm-1 ][ k ] * dwdr
-												+ ( d2wdr2 + dwdr * 2. / rm + d2wdthe2 / rm2 + dwdthe / rm2sinthe  * costhe
-												+ d2wdphi2 / rm2sinthe2
-												+ 2. * dudphi / rm2sinthe + dvdphi * 2. * costhe / rm2sinthe2 ) / re
-												- w.x[ i ][ jm-1 ][ k ] * k_Force / dphi2;
-		}
-	}
-
-}
-

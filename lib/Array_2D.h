@@ -12,12 +12,14 @@
 #define _ARRAY_2D_
 
 #include <iostream>
+#include <fstream>
+#include <string>
 
 using namespace std;
 
 class Array_2D
 {
-private:
+public:
     int jm, km;
 
 public:
@@ -26,7 +28,18 @@ public:
     Array_2D(int jdim, int kdim, double val);
     ~Array_2D ( );
 
+    Array_2D(): jm(0), km(0), y(NULL){}
+
     void printArray_2D ( int, int );
     void initArray_2D ( int, int, double );
+
+    void save(const string& fn){
+        std::ofstream os(fn + ".bin", std::ios::binary | std::ios::out);
+        for(int j=jm-1; j>=0; j--){
+            os.write(reinterpret_cast<const char*>(y[j]+(km/2)), std::streamsize((km/2)*sizeof(double)));
+            os.write(reinterpret_cast<const char*>(y[j]), std::streamsize((km/2+1)*sizeof(double)));
+        }
+        os.close();
+    }
 };
 #endif

@@ -1,5 +1,5 @@
 /*
- * Atmosphere General Circulation Modell ( AGCM ) applied to laminar flow
+ * Atmosphere General Circulation Modell (AGCM) applied to laminar flow
  * Program for the computation of geo-atmospherical circulating flows in a spherical shell
  * Finite difference scheme for the solution of the 3D Navier-Stokes equations
  * with 2 additional transport equations to describe the water vapour and co2 concentration
@@ -15,565 +15,353 @@
 #include <cstring>
 
 #include "Accuracy_Atm.h"
+#include "Utils.h"
 
 using namespace std;
+using namespace AtomUtils;
+
+Accuracy_Atm::Accuracy_Atm(int im, int jm, int km, double dthe, double dphi):
+    im(im),
+    jm(jm),
+    km(km),
+    i_res(0), 
+    j_res(0), 
+    k_res(0),
+    dr(0),
+    dthe(dthe),
+    dphi(dphi),
+    min(0.),
+    is_3d_flag(false)
+{}
 
 
-
-
-Accuracy_Atm::Accuracy_Atm( int im, int jm, int km, double dthe, double dphi )
-{
-	this-> im = im;
-	this-> jm = jm;
-	this-> km = km;
-	this-> dthe = dthe;
-	this-> dphi = dphi;
-}
-
-
-Accuracy_Atm::Accuracy_Atm( int im, int jm, int km, double dr, double dthe, double dphi )
-{
-	this-> im = im;
-	this-> jm = jm;
-	this-> km = km;
-	this-> dr = dr;
-	this-> dthe = dthe;
-	this-> dphi = dphi;
-}
-
-
-Accuracy_Atm::Accuracy_Atm ( int n, int nm, int Ma, int im, int jm, int km, double min, int j_res, int k_res, int velocity_iter_2D, int pressure_iter_2D, int velocity_iter_max_2D, int pressure_iter_max_2D )
-{
-	this-> n = n;
-	this-> nm = nm;
-	this-> Ma = Ma;
-	this-> im = im;
-	this-> jm = jm;
-	this-> km = km;
-	this-> min = min;
-	this-> j_res = j_res;
-	this-> k_res = k_res;
-	this-> velocity_iter_2D = velocity_iter_2D;
-	this-> pressure_iter_2D = pressure_iter_2D;
-	this-> velocity_iter_max_2D = velocity_iter_max_2D;
-	this-> pressure_iter_max_2D = pressure_iter_max_2D;
-
-}
-
-
-Accuracy_Atm::Accuracy_Atm ( int n, int nm, int Ma, int im, int jm, int km, double min, int i_res, int j_res, int k_res, int velocity_iter, int pressure_iter, int velocity_iter_max, int pressure_iter_max, double L_atm )
-{
-	this-> n = n;
-	this-> nm = nm;
-	this-> Ma = Ma;
-	this-> im = im;
-	this-> jm = jm;
-	this-> km = km;
-	this-> min = min;
-	this-> i_res = i_res;
-	this-> j_res = j_res;
-	this-> k_res = k_res;
-	this-> velocity_iter = velocity_iter;
-	this-> pressure_iter = pressure_iter;
-	this-> velocity_iter_max = velocity_iter_max;
-	this-> pressure_iter_max = pressure_iter_max;
-	this-> L_atm = L_atm;
-
-}
-
+Accuracy_Atm::Accuracy_Atm(int im, int jm, int km, double dr, double dthe, double dphi):
+    im(im),
+    jm(jm),
+    km(km),
+    i_res(0), 
+    j_res(0), 
+    k_res(0),
+    dr(dr),
+    dthe(dthe),
+    dphi(dphi),
+    min(0.),
+    is_3d_flag(true)
+{}
 
 Accuracy_Atm::~Accuracy_Atm () {}
 
-
-
-
-double Accuracy_Atm::residuumQuery_2D ( Array_1D &rad, Array_1D &the, Array &v, Array &w )
+std::tuple<double, int, int> 
+Accuracy_Atm::residuumQuery_2D (Array_1D &rad, Array_1D &the, Array &v, Array &w, Vector3D<> &residuum_2d)
 {
-// value of the residuum ( div c = 0 ) for the computation of the continuity equation ( min )
-	min = residuum = 0.;
+    // value of the residuum (div c = 0) for the computation of the continuity equation (min)
+    for (int j = 1; j < jm-1; j++)
+    {
+        double sinthe = sin(the.z[j]);
+        double costhe = cos(the.z[j]);
+        double rmsinthe = rad.z[0] * sinthe;
 
-	for ( int j = 1; j < jm-1; j++ )
-	{
-		sinthe = sin( the.z[ j ] );
-		costhe = cos( the.z[ j ] );
-		rmsinthe = rad.z[ 0 ] * sinthe;
+        for (int k = 1; k < km-1; k++)
+        {
+            double dvdthe = (v.x[0][j+1][k] - v.x[0][j-1][k]) / (2. * dthe);
+            double dwdphi = (w.x[0][j][k+1] - w.x[0][j][k-1]) / (2. * dphi);
+            double &residuum = residuum_2d(0,j,k) = 
+                dvdthe / rad.z[0] + costhe / rmsinthe * v.x[0][j][k] + dwdphi / rmsinthe;
+                
+            if (fabs (residuum) > min)
+            {
+                min = residuum;
+                j_res = j;
+                k_res = k;
+            }
+        }
+    }
+    return std::make_tuple(min, j_res, k_res);
+}
 
-	for ( int k = 1; k < km-1; k++ )
-		{
-				dvdthe = ( v.x[ 0 ][ j+1 ][ k ] - v.x[ 0 ][ j-1 ][ k ] ) / ( 2. * dthe );
-				dwdphi = ( w.x[ 0 ][ j ][ k+1 ] - w.x[ 0 ][ j ][ k-1 ] ) / ( 2. * dphi );
-				residuum = dvdthe / rad.z[ 0 ] + costhe / rmsinthe * v.x[ 0 ][ j ][ k ] + dwdphi / rmsinthe;
-			if ( fabs ( residuum ) >= min )
-			{
-				min = residuum;
-				j_res = j;
-				k_res = k;
-			}
-		}
-	}
+std::tuple<double, int, int, int>
+Accuracy_Atm::residuumQuery_3D (Array_1D &rad, Array_1D &the, Array &u, Array &v, Array &w, 
+                                        Vector3D<> &residuum_3d)
+{
+    assert(is_3d_flag);
+    // value of the residuum (div c = 0) for the computation of the continuity equation (min)
+    for (int i = 1; i < im-1; i++)
+    {
+        for (int j = 1; j < jm-1; j++)
+        {
+            double sinthe = sin(the.z[j]);
+            double costhe = cos(the.z[j]);
+            double rmsinthe = rad.z[i] * sinthe;
 
-	return 0;
+            for (int k = 1; k < km-1; k++)
+            {
+                double dudr = (u.x[i+1][j][k] - u.x[i-1][j][k]) / (2. * dr);
+                double dvdthe = (v.x[i][j+1][k] - v.x[i][j-1][k]) / (2. * dthe);
+                double dwdphi = (w.x[i][j][k+1] - w.x[i][j][k-1]) / (2. * dphi);
+
+                double &residuum = residuum_3d(i,j,k) = dudr + 2. * u.x[i][j][k] / rad.z[i] + dvdthe / rad.z[i]
+                            + costhe / rmsinthe * v.x[i][j][k] + dwdphi / rmsinthe;
+                //logger() << residuum_3d(i,j,k) << "  " << residuum << "  residuum" << std::endl;
+                if (fabs (residuum) > min)
+                {
+                    min = residuum;
+                    i_res = i;
+                    j_res = j;
+                    k_res = k;
+                }
+            }
+        }
+    }
+    return std::tuple<double, int, int, int>(min, i_res, j_res, k_res);
+}
+
+void Accuracy_Atm::steadyQuery_2D (Array &v, Array &vn, Array &w, Array &wn, Array &p_dyn, Array &p_dynn)
+{
+    // state of a steady solution (min)
+    double min_v = 0., min_w = 0., min_p = 0., tmp = 0.;
+    int j_v, k_v, j_w, k_w, j_p, k_p;
+    j_v = k_v = j_w = k_w = j_p = k_p = 0;    
+
+    for (int j = 0; j < jm; j++)
+    {
+        for (int k = 0; k < km; k++)
+        {
+            tmp = fabs (v.x[0][j][k] - vn.x[0][j][k]);
+            if (tmp > min_v)
+            {
+                min_v = tmp;
+                j_v = j;
+                k_v = k;
+            }
+
+            tmp = fabs (w.x[0][j][k] - wn.x[0][j][k]);
+            if (tmp > min_w)
+            {
+                min_w = tmp;
+                j_w = j;
+                k_w = k;
+            }
+
+            tmp = fabs (p_dyn.x[0][j][k] - p_dynn.x[0][j][k]);
+            if (tmp > min_p)
+            {
+                min_p = tmp;
+                j_p = j;
+                k_p = k;
+            }
+        }
+    }
+
+
+    // statements on the convergence und iterational process
+    cout.precision (6);
+    cout.setf (ios::fixed);
+
+    // printout of maximum and minimum absolute and relative errors of the computed values at their locations while iterating
+
+    cout << endl << endl << 
+        " 2D iterational process for the surface boundary conditions\n printout of maximum and minimum absolute and " <<
+        "relative errors of the computed values at their locations: level, latitude, longitude"
+         << endl << endl;
+
+    
+    print(" residuum: continuity equation ", min, j_res, k_res);
+
+    print(" dp: pressure Poisson equation ", min_p, j_p, k_p);
+
+    print(" dv: Navier Stokes equation ", min_v, j_v, k_v);
+
+    print(" dw: Navier Stokes equation ", min_w, j_w, k_w);
+
+    return;
+}
+
+
+void Accuracy_Atm::print(const string& name, double value, int j, int k) const{
+
+    AtomUtils::HemisphereCoords coords = AtomUtils::convert_coords(k, j);
+
+    cout << setiosflags (ios::left) << setw (36) << setfill ('.') << name << " = " << resetiosflags (ios::left) << 
+        setw (12) << fixed << setfill (' ') << value << setw (5) << int(coords.lat) << setw (3) << coords.north_or_south 
+        << setw (4) << int(coords.lon) << setw (3) << coords.east_or_west << endl;
 }
 
 
 
 
-
-double Accuracy_Atm::residuumQuery_3D ( Array_1D &rad, Array_1D &the, Array &u, Array &v, Array &w )
+void Accuracy_Atm::steadyQuery_3D (Array &u, Array &un, Array &v, Array &vn, Array &w, Array &wn, Array &t, Array &tn, 
+    Array &c, Array &cn, Array &cloud, Array &cloudn, Array &ice, Array &icen, Array &co2, Array &co2n, Array &p_dyn, 
+    Array &p_dynn, double L_atm)
 {
-// value of the residuum ( div c = 0 ) for the computation of the continuity equation ( min )
-	min = residuum = 0.;
+    // state of a steady solution (min)
+    double min_u = 0.; 
+    double min_v = 0.;
+    double min_w = 0.;
+    double min_t = 0.;
+    double min_c = 0.;
+    double min_p = 0.;
+    double min_cloud = 0.;
+    double min_ice = 0.;
+    double min_co2 = 0., tmp = 0.;
 
-	for ( int i = 1; i < im-1; i++ )
-	{
-		for ( int j = 1; j < jm-1; j++ )
-		{
-			sinthe = sin( the.z[ j ] );
-			costhe = cos( the.z[ j ] );
-			rmsinthe = rad.z[ i ] * sinthe;
+    int i_u = 0, j_u = 0, k_u = 0; 
+    int i_v = 0, j_v = 0, k_v = 0;
+    int i_w = 0, j_w = 0, k_w = 0;
+    int i_t = 0, j_t = 0, k_t = 0;
+    int i_c = 0, j_c = 0, k_c = 0;
+    int i_cloud = 0, j_cloud = 0, k_cloud = 0;
+    int i_ice = 0, j_ice = 0, k_ice = 0;
+    int i_co2 = 0, j_co2 = 0, k_co2 = 0; 
+    int i_p = 0, j_p = 0, k_p = 0;
 
-			for ( int k = 1; k < km-1; k++ )
-			{
-				dudr = ( u.x[ i+1 ][ j ][ k ] - u.x[ i-1 ][ j ][ k ] ) / ( 2. * dr );
-				dvdthe = ( v.x[ i ][ j+1 ][ k ] - v.x[ i ][ j-1 ][ k ] ) / ( 2. * dthe );
-				dwdphi = ( w.x[ i ][ j ][ k+1 ] - w.x[ i ][ j ][ k-1 ] ) / ( 2. * dphi );
+    for (int i = 0; i < im; i++)
+    {
+        for (int j = 0; j < jm; j++)
+        {
+            for (int k = 0; k < km; k++)
+            {
+                tmp = fabs (u.x[i][j][k] - un.x[i][j][k]);
+                if (tmp > min_u)
+                {
+                    min_u = tmp;
+                    i_u = i;
+                    j_u = j;
+                    k_u = k;
+                }
 
-				residuum = dudr + 2. * u.x[ i ][ j ][ k ] / rad.z[ i ] + dvdthe / rad.z[ i ]
-							+ costhe / rmsinthe * v.x[ i ][ j ][ k ] + dwdphi / rmsinthe;
-				if ( fabs ( residuum ) >= min )
-				{
-					min = residuum;
-					i_res = i;
-					j_res = j;
-					k_res = k;
-				}
-			}
-		}
-	}
-	return 0;
+                tmp = fabs (v.x[i][j][k] - vn.x[i][j][k]);
+                if (tmp > min_v)
+                {
+                    min_v = tmp;
+                    i_v = i;
+                    j_v = j;
+                    k_v = k;
+                }
+
+                tmp = fabs (w.x[i][j][k] - wn.x[i][j][k]);
+                if (tmp > min_w)
+                {
+                    min_w = tmp;
+                    i_w = i;
+                    j_w = j;
+                    k_w = k;
+                }
+
+                tmp = fabs (t.x[i][j][k] - tn.x[i][j][k]);
+                if (tmp > min_t)
+                {
+                    min_t = tmp;
+                    i_t = i;
+                    j_t = j;
+                    k_t = k;
+                }
+
+                tmp = fabs (c.x[i][j][k] - cn.x[i][j][k]);
+                if (tmp > min_c)
+                {
+                    min_c = tmp;
+                    i_c = i;
+                    j_c = j;
+                    k_c = k;
+                }
+
+                tmp = fabs (cloud.x[i][j][k] - cloudn.x[i][j][k]);
+                if (tmp > min_cloud)
+                {
+                    min_cloud = tmp;
+                    i_cloud = i;
+                    j_cloud = j;
+                    k_cloud = k;
+                }
+
+                tmp = fabs (ice.x[i][j][k] - icen.x[i][j][k]);
+                if (tmp > min_ice)
+                {
+                    min_ice = tmp;
+                    i_ice = i;
+                    j_ice = j;
+                    k_ice = k;
+                }
+
+                tmp = fabs (co2.x[i][j][k] - co2n.x[i][j][k]);
+                if (tmp > min_co2)
+                {
+                    min_co2 = tmp;
+                    i_co2 = i;
+                    j_co2 = j;
+                    k_co2 = k;
+                }
+
+                tmp = fabs (p_dyn.x[i][j][k] - p_dynn.x[i][j][k]);
+                if (tmp > min_p)
+                {
+                    min_p = tmp;
+                    i_p = i;
+                    j_p = j;
+                    k_p = k;
+                }
+            }
+        }
+    }
+
+    // statements on the convergence und iterational process
+    cout.precision (6);
+    cout.setf (ios::fixed);
+
+    // printout of maximum and minimum absolute and relative errors of the computed values at their locations while iterating
+
+    cout << endl << endl << " 3D iterational process for the surface boundary conditions\n printout of maximum and minimum " <<
+        "absolute and relative errors of the computed values at their locations: level, latitude, longitude" << endl;
+    
+    print(" residuum: continuity equation ", min, i_res * int (L_atm) / (im - 1), j_res, k_res);
+
+    print(" dp: pressure Poisson equation ", min_p, i_p * int (L_atm) / (im - 1), j_p, k_p);
+
+    print(" du: Navier Stokes equation ", min_u, i_u * int (L_atm) / (im - 1), j_u, k_u);
+
+    print(" dv: Navier Stokes equation ", min_v, i_v * int (L_atm) / (im - 1), j_v, k_v);
+
+    print(" dw: Navier Stokes equation ", min_w, i_w * int (L_atm) / (im - 1), j_w, k_w);
+
+    print(" dt: energy transport equation ", min_t, i_t * int (L_atm) / (im - 1), j_t, k_t);
+
+    print(" dc: vapour transport equation ", min_c, i_c * int (L_atm) / (im - 1), j_c, k_c);
+
+    print(" dcloud: cloud transport equation ", min_cloud, i_cloud * int (L_atm) / (im - 1), j_cloud, k_cloud);
+
+    print(" dice: ice transport equation ", min_ice, i_ice * int (L_atm) / (im - 1), j_ice, k_ice);
+
+    print(" dco: CO2 transport equation ", min_co2, i_co2 * int (L_atm) / (im - 1), j_co2, k_co2);
+
+    return;
+}
+
+void Accuracy_Atm::print(const string& name, double value, int i, int j, int k) const{
+
+    AtomUtils::HemisphereCoords coords = AtomUtils::convert_coords(k, j);
+
+    cout << setiosflags (ios::left) << setw (36) << setfill ('.') << name << " = " << resetiosflags (ios::left) << 
+        setw (12) << fixed << setfill (' ') << value << setw (5) << int(coords.lat) << setw (3) << coords.north_or_south 
+        << setw (4) << int(coords.lon) << setw (3) << coords.east_or_west << setw (6) << i << setw (2) << "m" << endl;
 }
 
 
-
-
-
-double Accuracy_Atm::steadyQuery_2D ( Array &v, Array &vn, Array &w, Array &wn, Array &p_dyn, Array &aux_p )
+double Accuracy_Atm::out_min () const
 {
-// state of a steady solution ( min )
-	min_v = max_v = 0.;
-	min_w = max_w = 0.;
-	min_p = max_p = 0.;
-
-	for ( int j = 0; j < jm; j++ )
-	{
-		for ( int k = 0; k < km; k++ )
-		{
-			max_v = fabs ( v.x[ 0 ][ j ][ k ] - vn.x[ 0 ][ j ][ k ] );
-			if ( max_v >= min_v )
-			{
-				min_v = max_v;
-				j_v = j;
-				k_v = k;
-			}
-
-			max_w = fabs ( w.x[ 0 ][ j ][ k ] - wn.x[ 0 ][ j ][ k ] );
-			if ( max_w >= min_w )
-			{
-				min_w = max_w;
-				j_w = j;
-				k_w = k;
-			}
-
-			max_p = fabs ( p_dyn.x[ 0 ][ j ][ k ] - aux_p.x[ 0 ][ j ][ k ] );
-			if ( max_p >= min_p )
-			{
-				min_p = max_p;
-				j_p = j;
-				k_p = k;
-			}
-		}
-	}
-
-
-// statements on the convergence und iterational process
-	cout.precision ( 6 );
-	cout.setf ( ios::fixed );
-
-	cout << endl << endl;
-	cout << "      >>>>>>>>>>>>>>>>>>>>>>>>>>>>>    2D    <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<" << endl;
-	cout << "      2D AGCM iterational process" << endl;
-	cout << "      max total iteration number nm = " << nm << endl;
-	cout << "      outer pressure loop:  max iteration number pressure_iter_max_2D = " << pressure_iter_max_2D << endl;
-	cout << "      inner velocity loop:  max iteration number velocity_iter_max_2D = " << velocity_iter_max_2D << endl << endl;
-
-	cout << "      n = " << n << "     " << "velocity_iter_2D = " << velocity_iter_2D << "     " << "pressure_iter_2D = " << pressure_iter_2D << "     " << "Ma = " << Ma << endl;
-	cout << endl;
-
-
-// printout of maximum and minimum absolute and relative errors of the computed values at their locations while iterating
-	heading = " 2D iterational process for the surface boundary conditions\n printout of maximum and minimum absolute and relative errors of the computed values at their locations: level, latitude, longitude";
-
-	cout << endl << endl << heading << endl << endl;
-
-	level = "m";
-	deg_north = "°N";
-	deg_south = "°S";
-	deg_west = "°W";
-	deg_east = "°E";
-
-	int choice = { 1 };
-
-	preparation:
-
-	switch ( choice )
-	{
-		case 1 :	name_Value = " residuum: continuity equation ";
-						Value = min;
-						j_loc = j_res;
-						k_loc = k_res;
-						break;
-
-		case 2 :	name_Value = " dp: pressure Poisson equation ";
-						Value = min_p;
-						j_loc = j_p;
-						k_loc = k_p;
-						break;
-
-		case 3 :	name_Value = " dv: Navier Stokes equation ";
-						Value = min_v;
-						j_loc = j_v;
-						k_loc = k_v;
-						break;
-
-		case 4 :	name_Value = " dw: Navier Stokes equation ";
-						Value = min_w;
-						j_loc = j_w;
-						k_loc = k_w;
-						break;
-
-
-		default : 	cout << choice << "error in iterationPrintout_3D member function in class Accuracy" << endl;
-	}
-
-						if ( j_loc <= 90 )
-						{
-							j_loc_deg = 90 - j_loc;
-							deg_lat = deg_north;
-						}
-
-						if ( j_loc > 90 )
-						{
-							j_loc_deg = j_loc - 90;
-							deg_lat = deg_south;
-						}
-
-
-						if ( k_loc <= 180 )
-						{
-							k_loc_deg = k_loc;
-							deg_lon = deg_east;
-						}
-
-						if ( k_loc > 180 )
-						{
-							k_loc_deg = 360 - k_loc;
-							deg_lon = deg_west;
-						}
-
-
-	cout << setiosflags ( ios::left ) << setw ( 36 ) << setfill ( '.' ) << name_Value << " = " << resetiosflags ( ios::left ) << setw ( 12 ) << fixed << setfill ( ' ' ) << Value << setw ( 5 ) << j_loc_deg << setw ( 3 ) << deg_lat << setw ( 4 ) << k_loc_deg << setw ( 3 ) << deg_lon << endl;
-
-	choice++;
-	if ( choice <= 4 ) goto preparation;
-
-	cout << endl << endl;
-
-	return 0;
+    return min;
 }
 
-
-
-
-
-
-
-double Accuracy_Atm::steadyQuery_3D ( Array &u, Array &un, Array &v, Array &vn, Array &w, Array &wn, Array &t, Array &tn, Array &c, Array &cn, Array &cloud, Array &cloudn, Array &ice, Array &icen, Array &co2, Array &co2n, Array &p_dyn, Array &aux_p )
+int Accuracy_Atm::out_i_res () const
 {
-// state of a steady solution ( min )
-	min_u = max_u = 0.;
-	min_v = max_v = 0.;
-	min_w = max_w = 0.;
-	min_t = max_t = 0.;
-	min_c = max_c = 0.;
-	min_p = max_p = 0.;
-	min_cloud = max_cloud = 0.;
-	min_ice = max_ice = 0.;
-	min_co2 = max_co2 = 0.;
-
-	for ( int i = 0; i < im; i++ )
-	{
-		for ( int j = 0; j < jm; j++ )
-		{
-			for ( int k = 0; k < km; k++ )
-			{
-				max_u = fabs ( u.x[ i ][ j ][ k ] - un.x[ i ][ j ][ k ] );
-				if ( max_u >= min_u )
-				{
-					min_u = max_u;
-					i_u = i;
-					j_u = j;
-					k_u = k;
-				}
-
-				max_v = fabs ( v.x[ i ][ j ][ k ] - vn.x[ i ][ j ][ k ] );
-				if ( max_v >= min_v )
-				{
-					min_v = max_v;
-					i_v = i;
-					j_v = j;
-					k_v = k;
-				}
-
-				max_w = fabs ( w.x[ i ][ j ][ k ] - wn.x[ i ][ j ][ k ] );
-				if ( max_w >= min_w )
-				{
-					min_w = max_w;
-					i_w = i;
-					j_w = j;
-					k_w = k;
-				}
-
-				max_t = fabs ( t.x[ i ][ j ][ k ] - tn.x[ i ][ j ][ k ] );
-				if ( max_t >= min_t )
-				{
-					min_t = max_t;
-					i_t = i;
-					j_t = j;
-					k_t = k;
-				}
-
-				max_c = fabs ( c.x[ i ][ j ][ k ] - cn.x[ i ][ j ][ k ] );
-				if ( max_c >= min_c )
-				{
-					min_c = max_c;
-					i_c = i;
-					j_c = j;
-					k_c = k;
-				}
-
-				max_cloud = fabs ( cloud.x[ i ][ j ][ k ] - cloudn.x[ i ][ j ][ k ] );
-				if ( max_cloud >= min_cloud )
-				{
-					min_cloud = max_cloud;
-					i_cloud = i;
-					j_cloud = j;
-					k_cloud = k;
-				}
-
-				max_ice = fabs ( ice.x[ i ][ j ][ k ] - icen.x[ i ][ j ][ k ] );
-				if ( max_ice >= min_ice )
-				{
-					min_ice = max_ice;
-					i_ice = i;
-					j_ice = j;
-					k_ice = k;
-				}
-
-				max_co2 = fabs ( co2.x[ i ][ j ][ k ] - co2n.x[ i ][ j ][ k ] );
-				if ( max_co2 >= min_co2 )
-				{
-					min_co2= max_co2;
-					i_co2 = i;
-					j_co2 = j;
-					k_co2 = k;
-				}
-
-				max_p = fabs ( p_dyn.x[ i ][ j ][ k ] - aux_p.x[ i ][ j ][ k ] );
-				if ( max_p >= min_p )
-				{
-					min_p = max_p;
-					i_p = i;
-					j_p = j;
-					k_p = k;
-				}
-
-			}
-		}
-	}
-
-
-
-
-// statements on the convergence und iterational process
-	cout.precision ( 6 );
-	cout.setf ( ios::fixed );
-
-	cout << endl << endl;
-	cout << "      >>>>>>>>>>>>>>>>>>>>>>>>>>>>>    3D    <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<" << endl;
-	cout << "      3D AGCM iterational process" << endl;
-	cout << "      max total iteration number nm = " << nm << endl;
-	cout << "      outer pressure loop:  max iteration number pressure_iter_max = " << pressure_iter_max << endl;
-	cout << "      inner velocity loop:  max iteration number velocity_iter_max = " << velocity_iter_max << endl << endl;
-
-	cout << "      n = " << n << "     " << "velocity_iter = " << velocity_iter << "     " << "pressure_iter = " << pressure_iter << "     " << "Ma = " << Ma << endl;
-	cout << endl;
-
-
-// printout of maximum and minimum absolute and relative errors of the computed values at their locations while iterating
-	heading = " 3D iterational process for the surface boundary conditions\n printout of maximum and minimum absolute and relative errors of the computed values at their locations: level, latitude, longitude";
-
-	cout << endl << endl << heading << endl << endl;
-
-	level = "m";
-	deg_north = "°N";
-	deg_south = "°S";
-	deg_west = "°W";
-	deg_east = "°E";
-
-	int choice = { 1 };
-
-	preparation:
-
-	switch ( choice )
-	{
-		case 1 :	name_Value = " residuum: continuity equation ";
-
-						Value = min;
-						i_loc = i_res;
-						j_loc = j_res;
-						k_loc = k_res;
-
-						break;
-
-		case 2 :	name_Value = " dp: pressure Poisson equation ";
-
-						Value = min_p;
-						i_loc = i_p;
-						j_loc = j_p;
-						k_loc = k_p;
-
-						break;
-
-		case 3 :	name_Value = " du: Navier Stokes equation ";
-
-						Value = min_u;
-						i_loc = i_u;
-						j_loc = j_u;
-						k_loc = k_u;
-
-						break;
-
-		case 4 :	name_Value = " dv: Navier Stokes equation ";
-						Value = min_v;
-						i_loc = i_v;
-						j_loc = j_v;
-						k_loc = k_v;
-						break;
-
-		case 5 :	name_Value = " dw: Navier Stokes equation ";
-						Value = min_w;
-						i_loc = i_w;
-						j_loc = j_w;
-						k_loc = k_w;
-						break;
-
-		case 6 :	name_Value = " dt: energy transport equation ";
-						Value = min_t;
-						i_loc = i_t;
-						j_loc = j_t;
-						k_loc = k_t;
-						break;
-
-		case 7 :	name_Value = " dc: vapour transport equation ";
-						Value = min_c;
-						i_loc = i_c;
-						j_loc = j_c;
-						k_loc = k_c;
-						break;
-
-		case 8 :	name_Value = " dcloud: cloud transport equation ";
-						Value = min_cloud;
-						i_loc = i_cloud;
-						j_loc = j_cloud;
-						k_loc = k_cloud;
-						break;
-
-		case 9 :	name_Value = " dice: ice transport equation ";
-						Value = min_ice;
-						i_loc = i_ice;
-						j_loc = j_ice;
-						k_loc = k_ice;
-						break;
-
-		case 10 :	name_Value = " dco: CO2 transport equation ";
-						Value = min_co2;
-						i_loc = i_co2;
-						j_loc = j_co2;
-						k_loc = k_co2;
-						break;
-
-		default : 	cout << choice << "error in iterationPrintout_3D member function in class Accuracy" << endl;
-	}
-
-						i_loc_level = i_loc * int ( L_atm ) / ( im - 1 );
-
-						if ( j_loc <= 90 )
-						{
-							j_loc_deg = 90 - j_loc;
-							deg_lat = deg_north;
-						}
-
-						if ( j_loc > 90 )
-						{
-							j_loc_deg = j_loc - 90;
-							deg_lat = deg_south;
-						}
-
-						if ( k_loc <= 180 )
-						{
-							k_loc_deg = k_loc;
-							deg_lon = deg_east;
-						}
-
-						if ( k_loc > 180 )
-						{
-							k_loc_deg = 360 - k_loc;
-							deg_lon = deg_west;
-						}
-
-
-	cout << setiosflags ( ios::left ) << setw ( 36 ) << setfill ( '.' ) << name_Value << " = " << resetiosflags ( ios::left ) << setw ( 12 ) << fixed << setfill ( ' ' ) << Value << setw ( 5 ) << j_loc_deg << setw ( 3 ) << deg_lat << setw ( 4 ) << k_loc_deg << setw ( 3 ) << deg_lon << setw ( 6 ) << i_loc_level << setw ( 2 ) << level << endl;
-
-	choice++;
-	if ( choice <= 10 ) goto preparation;
-
-	cout << endl << endl;
-
-	return 0;
+    return i_res;
 }
 
-
-
-
-
-
-
-double Accuracy_Atm::out_min (  ) const
+int Accuracy_Atm::out_j_res () const
 {
-	return min;
+    return j_res;
 }
 
-int Accuracy_Atm::out_i_res (  ) const
+int Accuracy_Atm::out_k_res () const
 {
-	return i_res;
-}
-
-int Accuracy_Atm::out_j_res (  ) const
-{
-	return j_res;
-}
-
-int Accuracy_Atm::out_k_res (  ) const
-{
-	return k_res;
+    return k_res;
 }
